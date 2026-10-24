@@ -11,8 +11,8 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
  * 模块永不接触提示词、状态、注入 —— 它只提供工具和感知。
  */
 
-/** 感知事件种类:接口层定义的开放小枚举。新模块优先复用现有 kind。 */
-export type PerceptionKind = "message" | "mention" | "mention_storm" | "alert";
+/** 感知事件种类:接口层定义的开放小枚举。新模块优先复用现有 kind(如生理摄入用 stimulant)。 */
+export type PerceptionKind = "message" | "mention" | "mention_storm" | "alert" | "stimulant";
 
 export interface PerceptionEvent {
   kind: PerceptionKind;

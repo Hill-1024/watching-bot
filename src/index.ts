@@ -15,7 +15,7 @@ import { buildCoreTools } from "./core/tools.js";
 import { ModelManager } from "./core/model-manager.js";
 import { MemoryStore } from "./memory/files.js";
 import { runConsolidation } from "./memory/consolidation.js";
-import { mockModuleFactory, type MockModule } from "./modules/mock.js";
+import { builtinModuleFactory, type BuiltinModule } from "./modules/builtin/index.js";
 import { napcatModuleFactory } from "./modules/napcat/index.js";
 import { openDb, Repo } from "./store/db.js";
 import { StateManager } from "./state/manager.js";
@@ -85,9 +85,8 @@ async function main(): Promise<void> {
 
   // ---- 模块总线 ----
   const bus = new ModuleHost({ clock, log, moduleConfigs: cfg.moduleConfig });
-  let mock: MockModule | undefined;
-  bus.registerFactory("mock", mockModuleFactory((m) => (mock = m)));
   bus.registerFactory("napcat", napcatModuleFactory);
+  bus.registerFactory("builtin", builtinModuleFactory);
   // 新模块工厂在这里注册;config.modules 控制启停
   await bus.startAll(cfg.modules);
 
@@ -242,6 +241,15 @@ async function main(): Promise<void> {
       bus,
       repo,
       modelManager,
+      coffee: (() => {
+        const m = bus.get("builtin");
+        return m
+          ? {
+              remaining: () => (m as BuiltinModule).coffeeRemaining(),
+              grant: (n: number) => (m as BuiltinModule).grantCoffee(n),
+            }
+          : null;
+      })(),
       onModelChanged: () => {
         const h = modelManager.current;
         agent.state.model = h.model as never;
@@ -264,34 +272,7 @@ async function main(): Promise<void> {
     });
   }
 
-  // faux 模式:排剧本(消息流 + 定时风暴),验证感知/吵醒链路
-  if (faux && mock) {
-    const chainMessages = () => {
-      clock.scheduleIn(45 * MIN, () => {
-        mock?.emitMessage(1);
-        chainMessages();
-      });
-    };
-    const chainStorms = () => {
-      clock.scheduleIn(4 * HOUR, () => {
-        log("[script] 剧本:来一轮 @风暴");
-        mock?.emitMentionStorm(8, 3);
-        chainStorms();
-      });
-    };
-    // 剧本:周期性上一个测试闹钟(验证响铃→赖床→重响→升级链路)
-    const chainAlarms = () => {
-      clock.scheduleIn(3 * HOUR, () => {
-        const due = clock.simNow() + 10 * MIN;
-        repo.addAlarm(due, clock.simNow(), "agent", "faux 测试闹钟");
-        log("[script] 剧本:测试闹钟已上弦(10 模拟分后响)");
-        chainAlarms();
-      });
-    };
-    chainMessages();
-    chainStorms();
-    chainAlarms();
-  }
+  // (faux 剧本已随 mock 模块移除;真实感知来自 napcat)
 
   // ---- 快照持久化 + 优雅退出 ----
   const saveSnapshot = () => {

@@ -118,10 +118,7 @@ export function installFauxLlm(): FauxHandles {
         return fauxAssistantMessage([fauxToolCall("sleep", {})]);
       }
 
-      // 平时:偶尔用一下模块工具 + wait,证明工具链路
-      if (step % 3 === 0) {
-        return fauxAssistantMessage([fauxToolCall("mock_reply", { text: "今天也平平淡淡。" })]);
-      }
+      // 平时:wait,证明循环链路
       return fauxAssistantMessage([fauxToolCall("wait", { minutes: 45 })]);
   };
 

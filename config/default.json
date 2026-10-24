@@ -12,10 +12,10 @@
     "tickRealMs": 1000
   },
   "modules": [
-    "napcat"
+    "napcat",
+    "builtin"
   ],
   "moduleConfig": {
-    "mock": {},
     "napcat": {
       "url": "ws://127.0.0.1:3001",
       "token": "",
@@ -24,6 +24,16 @@
       "memeDir": "data/modules/memes",
       "sendMinIntervalMs": 2500,
       "sendJitterMs": 1500
+    },
+    "builtin": {
+      "master": {
+        "qq": 0,
+        "name": "Hill"
+      },
+      "coffee": {
+        "dailyQuota": 3,
+        "refillSimHour": 8
+      }
     }
   },
   "state": {

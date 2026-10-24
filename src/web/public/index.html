@@ -194,6 +194,13 @@
             <button id="ts-go" style="width:64px">应用</button>
           </span>
         </div>
+        <div class="krow"><span class="k">咖啡余量</span>
+          <span style="display:flex;gap:8px;align-items:center">
+            <span class="v" id="coffee-n">—</span>
+            <button data-coffee="1" style="width:56px">补 1</button>
+            <button data-coffee="3" style="width:56px">补 3</button>
+          </span>
+        </div>
         <div class="btns">
           <button data-act="/api/sleep">强制入睡</button>
           <button data-act="/api/wake">强制唤醒</button>
@@ -337,6 +344,7 @@ function enter() {
   loadModel();
   loadHistory();
   loadActivity();
+  loadCoffee();
   setInterval(refresh, 2000);
   setInterval(loadHistory, 10000);
   setInterval(loadActivity, 2000);
@@ -408,7 +416,7 @@ function renderModules(mods) {
   let html = mods.map((m) =>
     `<div class="mrow"><span class="name"><b>${m.name}</b><span>${m.toolNames.length} 工具</span></span>
      <button data-mod="${m.name}" data-on="0">停用</button></div>`).join("");
-  for (const n of ["mock", "napcat"]) {
+  for (const n of ["napcat", "builtin"]) {
     if (!known.has(n)) {
       html += `<div class="mrow"><span class="name"><b>${n}</b><span>未启用</span></span>
         <button data-mod="${n}" data-on="1">启用</button></div>`;
@@ -526,6 +534,23 @@ async function loadHistory() {  let h;
     return `<div class="srow"><span class="name">${label}</span>
       <svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${label}历史曲线"><path d="${path}"/></svg></div>`;
   }).join("");
+}
+
+// ---------- 咖啡配给 ----------
+async function loadCoffee() {
+  try {
+    const r = await api("/api/coffee");
+    const d = await r.json();
+    $("coffee-n").textContent = d.remaining + " 杯";
+  } catch { $("coffee-n").textContent = "—"; }
+}
+for (const b of document.querySelectorAll("[data-coffee]")) {
+  b.addEventListener("click", async () => {
+    const r = await post("/api/coffee", { n: Number(b.dataset.coffee) });
+    $("act-msg").textContent = r.ok ? `已补 ${b.dataset.coffee} 杯,现存 ${r.data.remaining}。` : (r.data.error || "失败");
+    $("act-msg").className = r.ok ? "msg-ok" : "msg-error";
+    loadCoffee();
+  });
 }
 
 // ---------- 活动日志(增量轮询) ----------

@@ -16,6 +16,8 @@ export interface PanelDeps {
   modelManager: ModelManager;
   /** 面板切换模型后,把新句柄热替换到 pi Agent(在 index.ts 闭包里做) */
   onModelChanged(): void;
+  /** builtin 模块的咖啡配给(模块未启用时为 null) */
+  coffee: { remaining(): number; grant(n: number): void } | null;
   /** 模块热插拔 */
   setModule(name: string, enable: boolean): Promise<{ ok: boolean; error?: string }>;
   port: number;
@@ -155,6 +157,26 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
     }
     deps.onModelChanged();
     res.json({ ok: true, model: deps.modelManager.view() });
+  });
+
+  /** 咖啡配给(builtin 模块) */
+  app.get("/api/coffee", auth, (_req, res) => {
+    if (!deps.coffee) {
+      res.status(404).json({ error: "builtin 模块未启用" });
+      return;
+    }
+    res.json({ remaining: deps.coffee.remaining() });
+  });
+
+  app.post("/api/coffee", auth, (req, res) => {
+    if (!deps.coffee) {
+      res.status(404).json({ error: "builtin 模块未启用" });
+      return;
+    }
+    const n = Math.max(0, Math.min(20, Math.round(Number((req.body as { n?: number }).n ?? 1))));
+    deps.coffee.grant(n);
+    deps.log(`[panel] 主人补了 ${n} 杯咖啡,现存 ${deps.coffee.remaining()}`);
+    res.json({ ok: true, remaining: deps.coffee.remaining() });
   });
 
   app.use(express.static(resolve("src/web/public")));

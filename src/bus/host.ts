@@ -122,6 +122,11 @@ export class ModuleHost implements ModuleBus {
     return [];
   }
 
+  /** 按名取运行中的模块实例(面板操作特化能力用,如 builtin 的咖啡配给) */
+  get(name: string): BotModule | undefined {
+    return this.modules.get(name);
+  }
+
   capabilitySection(): string {
     const mods = [...this.modules.values()];
     if (mods.length === 0) return "(当前没有接入任何外部能力模块)";
