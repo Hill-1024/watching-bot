@@ -68,9 +68,12 @@ src/
 ├── memory/         # 睡眠期长期记忆归并(日记 + MEMORY.md 索引 + 周归并)
 ├── store/          # SQLite(状态历史/注入/睡眠记录/闹钟/事件)+ state.json 快照
 └── web/            # 管理面板(读写)
+third_party/napcat  # NapNeko/NapCatQQ 仓库指针(submodule,仅协议/源码参考,不参与构建)
 tools/              # mock-onebot-server(假 QQ)、debug 脚本
 tests/              # 状态引擎/文案安全单测
 ```
+
+> `third_party/napcat` 是钉了 commit 的仓库指针:运行时我们只通过官方 Docker 镜像 + OneBot 11 WebSocket 与 NapCat 通信(跨进程,不 import 它的代码);这个指针用于对照协议实现、查扩展 API(如 `set_msg_emoji_like`)的源码行为。clone 后执行 `git submodule update --init` 拉取;`git submodule update --remote` 跟进上游。
 
 ## 写新模块
 
