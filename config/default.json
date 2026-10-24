@@ -1,0 +1,88 @@
+{
+  "$comment": "watching-bot 主配置。apiKey 从环境变量 WATCHING_BOT_API_KEY 读取,勿写入本文件。",
+  "model": {
+    "provider": "openai-compat",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "model": "glm-4.7",
+    "apiKeyEnv": "WATCHING_BOT_API_KEY",
+    "contextWindow": 128000
+  },
+  "time": {
+    "timeScale": 1,
+    "simStart": "2026-10-24T22:00:00",
+    "tickRealMs": 1000
+  },
+  "modules": ["mock", "napcat"],
+  "moduleConfig": {
+    "mock": {},
+    "napcat": {
+      "url": "ws://127.0.0.1:3001",
+      "token": "",
+      "selfId": 0,
+      "dbPath": "data/modules/napcat.db",
+      "sendMinIntervalMs": 2500,
+      "sendJitterMs": 1500
+    }
+  },
+  "state": {
+    "vars": {
+      "fatigue": { "min": 0, "max": 100, "init": 30 },
+      "mood": { "min": -100, "max": 100, "init": 10 },
+      "annoyance": { "min": 0, "max": 100, "init": 0 },
+      "stress": { "min": 0, "max": 100, "init": 10 },
+      "social": { "min": 0, "max": 100, "init": 80 }
+    },
+    "rules": {
+      "fatiguePerSimHourAwake": 5.5,
+      "fatiguePerTurn": 0.4,
+      "fatigueRecoveryPerSimHour": 14,
+      "annoyanceDecayPerSimHour": 3,
+      "annoyancePerAlarmRing": 9,
+      "annoyancePerStormTick": 4,
+      "stressDecayPerSimHour": 1.5,
+      "socialRecoveryPerSimHourAlone": 2,
+      "moodRegressionToBaselinePerSimHour": 0.5,
+      "moodBaseline": 10
+    },
+    "thresholds": {
+      "drowsyInject": 45,
+      "drowsyTier2": 65,
+      "drowsyTier3": 78,
+      "forcedSleep": 90,
+      "naturalWake": 15,
+      "drowsyOnWake": 40,
+      "sleepHardCapSimMinutes": 720,
+      "alarmRingIntervalSimMinutes": 10,
+      "stormWindowSimMinutes": 3,
+      "stormMinMentions": 5,
+      "feelingRepeatCooldownSimMinutes": 45
+    }
+  },
+  "loop": {
+    "heartbeatSimMinutes": 20,
+    "emptyBackoffBaseSimMinutes": 30,
+    "emptyBackoffMaxSimMinutes": 180,
+    "perceptionFlushDelayMs": 4000,
+    "hotTailMessages": 40
+  },
+  "memory": {
+    "dataDir": "data",
+    "memoryFile": "data/MEMORY.md",
+    "diaryDir": "data/memories",
+    "consolidateDiaryDaysToWeek": 7
+  },
+  "sleep": {
+    "wakeOnStorm": true,
+    "maxSnoozeBeforeForcedWake": 6
+  },
+  "panel": {
+    "enabled": true,
+    "port": 8080,
+    "tokenEnv": "WATCHING_BOT_PANEL_TOKEN"
+  },
+  "judge": {
+    "enabled": true,
+    "cooldownSimMinutes": 30,
+    "maxCallsPerSimDay": 6
+  }
+}
