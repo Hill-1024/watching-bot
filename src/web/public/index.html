@@ -373,15 +373,35 @@ async function refresh() {
   loadInjections();
 }
 function renderVars(vars) {
-  $("vars").innerHTML = VARS.map(([k, label, min, max]) => {
+  // 持久行:只在第一次构建 DOM,之后只原地更新,避免 2s 轮询打断输入
+  const root = document.getElementById("vars");
+  if (root.children.length === 0) {
+    root.innerHTML = VARS.map(([k, label]) =>
+      `<div class="vrow" data-k="${k}"><span class="name">${label}</span>
+      <div class="bar"><i></i></div>
+      <span class="num"></span>
+      <input type="number" step="1" aria-label="${label}数值" /></div>`).join("");
+    for (const input of root.querySelectorAll("input")) {
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+      input.addEventListener("change", () => {
+        const def = VARS.find((x) => x[0] === input.closest(".vrow").dataset.k);
+        // 超限不拒绝,直接钳制到上下限
+        const clamped = Math.max(def[2], Math.min(def[3], Number(input.value) || 0));
+        input.value = (Math.round(clamped * 10) / 10).toFixed(1);
+        setVar(def[0], clamped);
+      });
+    }
+  }
+  for (const row of root.querySelectorAll(".vrow")) {
+    const k = row.dataset.k;
+    const def = VARS.find((x) => x[0] === k);
     const v = vars[k] ?? 0;
-    const pct = (((v - min) / (max - min)) * 100).toFixed(1);
-    return `<div class="vrow"><span class="name">${label}</span>
-      <div class="bar"><i style="width:${pct}%"></i></div>
-      <span class="num">${(Math.round(v * 10) / 10).toFixed(1)}</span>
-      <input type="number" value="${(Math.round(v * 10) / 10).toFixed(1)}" step="1"
-        aria-label="${label}数值" onchange="setVar('${k}', Number(this.value))" /></div>`;
-  }).join("");
+    const input = row.querySelector("input");
+    row.querySelector(".bar i").style.width = (((v - def[2]) / (def[3] - def[2])) * 100).toFixed(1) + "%";
+    row.querySelector(".num").textContent = (Math.round(v * 10) / 10).toFixed(1);
+    // 焦点中的输入框不被轮询覆写
+    if (document.activeElement !== input) input.value = (Math.round(v * 10) / 10).toFixed(1);
+  }
 }
 function renderModules(mods) {
   const known = new Set(mods.map((m) => m.name));

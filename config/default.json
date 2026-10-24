@@ -11,7 +11,9 @@
     "timeScale": 1,
     "tickRealMs": 1000
   },
-  "modules": ["napcat"],
+  "modules": [
+    "napcat"
+  ],
   "moduleConfig": {
     "mock": {},
     "napcat": {
@@ -26,22 +28,42 @@
   },
   "state": {
     "vars": {
-      "fatigue": { "min": 0, "max": 100, "init": 30 },
-      "mood": { "min": -100, "max": 100, "init": 10 },
-      "annoyance": { "min": 0, "max": 100, "init": 0 },
-      "stress": { "min": 0, "max": 100, "init": 10 },
-      "social": { "min": 0, "max": 100, "init": 80 }
+      "fatigue": {
+        "min": 0,
+        "max": 100,
+        "init": 30
+      },
+      "mood": {
+        "min": -100,
+        "max": 100,
+        "init": 10
+      },
+      "annoyance": {
+        "min": 0,
+        "max": 100,
+        "init": 0
+      },
+      "stress": {
+        "min": 0,
+        "max": 100,
+        "init": 10
+      },
+      "social": {
+        "min": 0,
+        "max": 100,
+        "init": 80
+      }
     },
     "rules": {
-      "fatiguePerSimHourAwake": 5.5,
-      "fatiguePerTurn": 0.4,
-      "fatigueRecoveryPerSimHour": 14,
-      "annoyanceDecayPerSimHour": 3,
+      "fatiguePerSimHourAwake": 3.5,
+      "fatiguePerTurn": 0.2,
+      "fatigueRecoveryPerSimHour": 10,
+      "annoyanceDecayPerSimHour": 2,
       "annoyancePerAlarmRing": 9,
       "annoyancePerStormTick": 4,
       "stressDecayPerSimHour": 1.5,
       "socialRecoveryPerSimHourAlone": 2,
-      "moodRegressionToBaselinePerSimHour": 0.5,
+      "moodRegressionToBaselinePerSimHour": 0.3,
       "moodBaseline": 10
     },
     "thresholds": {

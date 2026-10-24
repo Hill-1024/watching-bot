@@ -51,7 +51,7 @@ export function applyStateEvent(
     case "perception": {
       const k = event.kind;
       if (k === "mention") set("annoyance", r.annoyancePerStormTick * event.intensity);
-      else if (k === "message") set("social", -1.5 * event.intensity);
+      else if (k === "message") set("social", -0.3 * event.intensity); // 环境闲聊只轻微耗电,主力消耗在主动社交(toolTag)
       else if (k === "mention_storm") set("annoyance", r.annoyancePerStormTick * 2 * event.intensity);
       else if (k === "alert") set("stress", 3 * event.intensity);
       break;
