@@ -1,0 +1,43 @@
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: watching-napcat
+    restart: unless-stopped
+    environment:
+      - ACCOUNT=${QQ_ACCOUNT:-}
+      - NAPCAT_GID=0
+      - NAPCAT_UID=0
+    ports:
+      - "6099:6099" # WebUI(扫码登录 + 网络配置)
+      - "3001:3001" # OneBot 11 正向 WS
+    volumes:
+      - napcat-data:/app/napcat
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:6099 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  watching-bot:
+    build: .
+    container_name: watching-bot
+    restart: unless-stopped
+    depends_on:
+      napcat:
+        condition: service_started
+    environment:
+      - WATCHING_BOT_API_KEY=${WATCHING_BOT_API_KEY}
+      - WATCHING_BOT_PANEL_TOKEN=${WATCHING_BOT_PANEL_TOKEN:-watching}
+       - WATCHING_BOT_TIMESCALE=${WATCHING_BOT_TIMESCALE:-1}
+      - NAPCAT_URL=ws://napcat:3001
+      - NAPCAT_TOKEN=${NAPCAT_TOKEN:-}
+      - TZ=Asia/Shanghai
+    ports:
+      - "8080:8080" # 管理面板
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./persona:/app/persona
+
+volumes:
+  napcat-data:
