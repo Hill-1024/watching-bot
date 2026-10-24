@@ -1,0 +1,110 @@
+import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
+import {
+  DEFAULT_COMPACTION_SETTINGS,
+  estimateTokens,
+  generateSummaryWithUsage,
+  shouldCompact,
+} from "@earendil-works/pi-coding-agent";
+import type { Message } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
+import type { LoopConfig } from "../config.js";
+import { COMPACTION_SUMMARY_PLACEHOLDER } from "./compaction-consts.js";
+
+const LLM_ROLES = new Set(["system", "user", "assistant", "toolResult"]);
+
+/** 只把标准角色消息交给 LLM(pi-coding-agent 的声明合并会给 AgentMessage 加自定义类型) */
+function toLlmMessages(messages: AgentMessage[]): Message[] {
+  return messages.filter((m) => LLM_ROLES.has((m as { role?: string }).role ?? "")) as Message[];
+}
+
+export { toLlmMessages };
+
+export interface AgentAssembly {
+  agent: Agent;
+}
+
+/**
+ * pi Agent 装配:
+ * - 系统提示 = persona + 各 section(memory/capabilities/inner),section 可后续热更新
+ * - convertToLlm 直通(只用标准角色)
+ * - transformContext:上下文接近窗口时,用 pi coding-agent 导出的 compaction 纯函数
+ *   (shouldCompact/estimateContextTokens/generateSummaryWithUsage)做摘要压缩,旧消息折叠为一条摘要
+ */
+export function createAgent(opts: {
+  model: Model<any>;
+  streamFn: StreamFn;
+  /** 基础人设文本(persona.md) */
+  systemPrompt: string;
+  /** 命名 sections:memory/capabilities/instructions 等,可被后续 system 消息热更新 */
+  sections: Record<string, string | null>;
+  tools: AgentTool[];
+  /** 恢复的 transcript(不含 leading system 消息) */
+  restoredMessages?: import("@earendil-works/pi-agent-core").AgentMessage[];
+  loopCfg: LoopConfig;
+  contextWindow: number;
+  summarize: (messages: import("@earendil-works/pi-agent-core").AgentMessage[]) => Promise<string>;
+  log?: (msg: string) => void;
+}): AgentAssembly {
+  const log = opts.log ?? (() => {});
+  const leadingSystem: import("@earendil-works/pi-agent-core").AgentMessage = {
+    role: "system",
+    content: opts.systemPrompt,
+    sections: opts.sections,
+    timestamp: Date.now(),
+  };
+  const initialMessages = [leadingSystem, ...(opts.restoredMessages ?? [])];
+  const agent = new Agent({
+    initialState: {
+      model: opts.model,
+      thinkingLevel: "off",
+      tools: opts.tools,
+      messages: initialMessages,
+    },
+    convertToLlm: toLlmMessages,
+    streamFn: opts.streamFn,
+    transformContext: async (messages) => {
+      const tokens = messages.reduce((n, m) => n + estimateTokens(m), 0);
+      if (!shouldCompact(tokens, opts.contextWindow, DEFAULT_COMPACTION_SETTINGS)) {
+        return messages;
+      }
+      // 找切点:从尾往前保留 ~keepRecentTokens,切在消息边界(非 system)
+      const keepTokens = DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
+      let cut = messages.length;
+      let acc = 0;
+      for (let i = messages.length - 1; i >= 1; i--) {
+        const m = messages[i]!;
+        if (m.role === "system") break;
+        acc += roughTokens(m);
+        cut = i;
+        if (acc >= keepTokens) break;
+      }
+      if (cut <= 1) return messages;
+      const toSummarize = messages.slice(1, cut);
+      log(`[compaction] 上下文 ${tokens} tokens 超限,压缩 ${toSummarize.length} 条旧消息`);
+      try {
+        const summary = await opts.summarize(toSummarize);
+        const summaryMsg = {
+          role: "user" as const,
+          content: `${COMPACTION_SUMMARY_PLACEHOLDER}${summary}`,
+          timestamp: Date.now(),
+        };
+        return [messages[0]!, summaryMsg, ...messages.slice(cut)];
+      } catch (err) {
+        log(`[compaction] 压缩失败,本次跳过: ${String(err)}`);
+        return messages;
+      }
+    },
+  });
+  return { agent };
+}
+
+/** 粗估 tokens:优先用 pi 的 estimateTokens,失败退固定值 */
+function roughTokens(m: unknown): number {
+  try {
+    return estimateTokens(m as AgentMessage);
+  } catch {
+    return 32;
+  }
+}
+
+export type { LoopConfig };
