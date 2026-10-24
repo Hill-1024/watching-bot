@@ -12,7 +12,7 @@ import { AgentCore } from "./core/loop.js";
 import { Emitter, type CoreEvent } from "./core/events.js";
 import { Injector } from "./core/inject.js";
 import { buildCoreTools } from "./core/tools.js";
-import { buildOpenAiCompatLlm } from "./core/llm.js";
+import { buildLlm } from "./core/llm.js";
 import { MemoryStore } from "./memory/files.js";
 import { runConsolidation } from "./memory/consolidation.js";
 import { mockModuleFactory, type MockModule } from "./modules/mock.js";
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
 
   // ---- LLM:faux(测试剧本)或真实 OpenAI 兼容端点 ----
   const faux = process.env.WATCHING_BOT_FAUX_LLM === "1";
-  const llm = faux ? installFauxLlm() : buildOpenAiCompatLlm(cfg.model);
+  const llm = faux ? installFauxLlm() : buildLlm(cfg.model);
   const apiKey = faux ? "" : modelApiKey(cfg.model);
   if (!faux && !apiKey) log("[warn] 未设置模型 API key 环境变量,LLM 调用将失败");
 
