@@ -5,6 +5,7 @@ import {
   type MutableModels,
 } from "@earendil-works/pi-ai";
 import { streamSimple as openaiCompletionsStreamSimple } from "@earendil-works/pi-ai/api/openai-completions";
+import { streamSimple as openaiResponsesStreamSimple } from "@earendil-works/pi-ai/api/openai-responses";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { getEnvApiKey } from "@earendil-works/pi-ai/compat";
 import type { ModelConfig } from "../config.js";
@@ -34,11 +35,21 @@ export function buildLlm(cfg: ModelConfig): LlmHandles {
 
   if (cfg.baseUrl) {
     const apiKey = cfg.apiKey || process.env[cfg.apiKeyEnv] || "";
+    // baseUrl 以 /responses 结尾 = OpenAI Responses API(pi 内置实现,POST {baseUrl}/responses)
+    const isResponses = /\/responses\/?$/.test(cfg.baseUrl);
+    const baseUrl = isResponses ? cfg.baseUrl.replace(/\/responses\/?$/, "") : cfg.baseUrl;
+    const apiId = isResponses ? "openai-responses" : "openai-completions";
+    const impl = (
+      model: never,
+      context: never,
+      options: never,
+    ): ReturnType<typeof openaiCompletionsStreamSimple> =>
+      (isResponses ? openaiResponsesStreamSimple : openaiCompletionsStreamSimple)(model, context, options) as never;
     models.setProvider(
       createProvider({
         id: "watching-bot-custom",
-        name: `watching-bot(${new URL(cfg.baseUrl).host})`,
-        baseUrl: cfg.baseUrl,
+        name: `watching-bot(${new URL(baseUrl).host})`,
+        baseUrl,
         auth: {
           apiKey: {
             name: cfg.apiKeyEnv,
@@ -49,22 +60,22 @@ export function buildLlm(cfg: ModelConfig): LlmHandles {
           {
             id: cfg.model,
             name: cfg.model,
-            api: "openai-completions",
+            api: apiId as never,
             provider: "watching-bot-custom",
-            baseUrl: cfg.baseUrl,
+            baseUrl,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            reasoning: false,
+            reasoning: isResponses,
             contextWindow: cfg.contextWindow,
-            maxTokens: 8192,
+            maxTokens: cfg.maxTokens ?? 8192,
           },
         ],
         api: {
-          "openai-completions": {
-            stream: (model, context, options) => openaiCompletionsStreamSimple(model as never, context, options),
-            streamSimple: (model, context, options) => openaiCompletionsStreamSimple(model as never, context, options),
+          [apiId]: {
+            stream: (model: never, context: never, options: never) => impl(model, context, options),
+            streamSimple: (model: never, context: never, options: never) => impl(model, context, options),
           },
-        },
+        } as never,
       }),
     );
   }

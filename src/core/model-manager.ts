@@ -9,6 +9,9 @@ export interface ModelOverride {
   baseUrl?: string;
   apiKey?: string;
   contextWindow?: number;
+  maxTokens?: number;
+  /** off|minimal|low|medium|high|xhigh|max */
+  thinkingLevel?: string;
 }
 
 export interface ModelView {
@@ -17,6 +20,8 @@ export interface ModelView {
   model: string;
   baseUrl: string;
   contextWindow: number;
+  maxTokens: number;
+  thinkingLevel: string;
   apiKeyEnv: string;
   apiKeySet: boolean;
   apiKeyMasked: string;
@@ -57,7 +62,16 @@ export class ModelManager {
       apiKey: this.override.apiKey,
       apiKeyEnv: this.base.apiKeyEnv,
       contextWindow: this.override.contextWindow || this.base.contextWindow,
+      maxTokens: this.override.maxTokens || this.base.maxTokens,
+      thinkingLevel: this.override.thinkingLevel || this.base.thinkingLevel,
     };
+  }
+
+  /** 生效的 agent 推理档位(合法值之外回退 off) */
+  thinkingLevel(): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" {
+    const v = this.effective().thinkingLevel;
+    const ok = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    return (ok.includes(v ?? "") ? v : "off") as never;
   }
 
   private rebuild(): void {
@@ -88,6 +102,8 @@ export class ModelManager {
     if (b !== undefined) merged.baseUrl = b; // 空串 = 清除,走 pi 目录
     if (typeof partial.apiKey === "string" && partial.apiKey.trim() !== "") merged.apiKey = partial.apiKey.trim();
     if (typeof partial.contextWindow === "number" && partial.contextWindow > 0) merged.contextWindow = Math.round(partial.contextWindow);
+    if (typeof partial.maxTokens === "number" && partial.maxTokens > 0) merged.maxTokens = Math.round(partial.maxTokens);
+    if (typeof partial.thinkingLevel === "string" && partial.thinkingLevel.trim() !== "") merged.thinkingLevel = partial.thinkingLevel.trim();
     this.override = merged;
     try {
       this.rebuild();
@@ -123,6 +139,8 @@ export class ModelManager {
       model: e.model,
       baseUrl: e.baseUrl,
       contextWindow: e.contextWindow,
+      maxTokens: e.maxTokens ?? 8192,
+      thinkingLevel: this.thinkingLevel(),
       apiKeyEnv: this.base.apiKeyEnv,
       apiKeySet: key !== "",
       apiKeyMasked: key ? `${key.slice(0, 3)}••••${key.slice(-4)}` : "",

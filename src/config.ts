@@ -9,6 +9,10 @@ export interface ModelConfig {
   /** 面板覆盖层写入的明文 key(优先于环境变量);基础配置一般不填 */
   apiKey?: string;
   contextWindow: number;
+  /** 单次回复 token 上限(自定义端点用;目录模型自带) */
+  maxTokens?: number;
+  /** agent 推理档位:off|minimal|low|medium|high|xhigh|max */
+  thinkingLevel?: string;
 }
 
 export interface TimeConfig {

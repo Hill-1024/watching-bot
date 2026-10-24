@@ -119,7 +119,7 @@ async function main(): Promise<void> {
       undefined,
       "这是一位过日常生活的虚拟角色的对话记录。摘要保留:人物与关系、情绪事件、重要约定与承诺、未完成的事;忽略工具调用的技术细节。",
       undefined,
-      "off",
+      modelManager.thinkingLevel(),
       streamFn,
     );
     return text;
@@ -143,6 +143,7 @@ async function main(): Promise<void> {
     summarize,
     log,
   });
+  agent.state.thinkingLevel = modelManager.thinkingLevel();
 
   // ---- 核心 + 归并钩子 ----
   const core = new AgentCore({
@@ -244,8 +245,9 @@ async function main(): Promise<void> {
         const h = modelManager.current;
         agent.state.model = h.model as never;
         agent.streamFunction = h.streamFn;
+        agent.state.thinkingLevel = modelManager.thinkingLevel();
         core.refreshMemorySection();
-        log("[panel] 模型句柄已热替换到 agent");
+        log(`[panel] 模型句柄已热替换到 agent(推理档位 ${modelManager.thinkingLevel()})`);
       },
       port: cfg.panel.port,
       token: process.env[cfg.panel.tokenEnv] ?? "",
