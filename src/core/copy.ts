@@ -115,7 +115,7 @@ export function renderEnv(kind: EnvKind, arg?: { n?: number; count?: number; not
 
 /** 工具的拟人化返回文案 */
 export const toolCopy = {
-  waited: (minutes: number) => `你发了会儿呆,时间过去了大约 ${minutes} 分钟。`,
+  waited: (minutes: number) => `你决定放空大约 ${minutes} 分钟,到点了自己会回过神来。`,
   wentToBed: "你放下一切,钻进了被窝。意识慢慢沉入黑暗。",
   wakeConfirmed: "你彻底醒了,揉了揉脸,坐了起来。",
   snoozed: "你翻了个身,把闹钟按掉,决定再睡一会儿。",

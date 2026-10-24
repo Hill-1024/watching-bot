@@ -59,13 +59,14 @@ async function main(): Promise<void> {
   const persisted = loadPersisted(cfg.time);
 
   const clock = new SimClock({
-    simStart: cfg.time.simStart,
+    // 快照恢复 → 沿用快照时刻;全新启动 → 有 simStart 用它(调试),否则以现实时间为锚
+    simStart: persisted ? undefined : cfg.time.simStart,
     resumeSimNow: persisted?.simNow,
     timeScale: Number(process.env.WATCHING_BOT_TIMESCALE ?? cfg.time.timeScale),
     tickRealMs: cfg.time.tickRealMs,
   });
   const log = makeLog(clock);
-  log(`watching-bot 启动,timeScale=${clock.timeScale}${persisted ? "(从快照恢复)" : ""}`);
+  log(`watching-bot 启动,timeScale=${clock.timeScale}${persisted ? "(从快照恢复)" : "(全新,以现实时间为锚)"} | 模拟时间 ${fmtSim(clock.simNow())}`);
 
   const repo = new Repo(openDb(cfg.memory.dataDir));
   const memory = new MemoryStore(cfg.memory);

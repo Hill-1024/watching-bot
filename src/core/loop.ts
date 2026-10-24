@@ -356,6 +356,11 @@ export class AgentCore implements CoreCommands, MachineHost {
       this.deps.cfg.loop.emptyBackoffMaxSimMinutes,
     );
     // 有待注入体感 → 1 模拟分内感知;否则心跳/退避
+    // 注意:模型已 wait(N) 时绝不提前心跳 —— 否则长 wait 被心跳砍短(「wait 是假的」bug)
+    if (this.nextKickSim != null) {
+      this.log(`[loop] 已有待触发(如 wait/闹钟),跳过心跳排程`);
+      return;
+    }
     const wait = this.deps.injector.pendingCount > 0 ? 1 : idleSimMin;
     this.scheduleKickIn(wait * MIN, `idle:x${this.emptyBackoffMul}`);
   }

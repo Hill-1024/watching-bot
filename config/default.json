@@ -9,10 +9,9 @@
   },
   "time": {
     "timeScale": 1,
-    "simStart": "2026-10-24T22:00:00",
     "tickRealMs": 1000
   },
-  "modules": ["mock", "napcat"],
+  "modules": ["napcat"],
   "moduleConfig": {
     "mock": {},
     "napcat": {
@@ -20,6 +19,7 @@
       "token": "",
       "selfId": 0,
       "dbPath": "data/modules/napcat.db",
+      "memeDir": "data/modules/memes",
       "sendMinIntervalMs": 2500,
       "sendJitterMs": 1500
     }

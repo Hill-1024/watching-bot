@@ -17,7 +17,8 @@ export interface ModelConfig {
 
 export interface TimeConfig {
   timeScale: number;
-  simStart: string;
+  /** 调试用固定起点;留空 = 全新启动以现实时间为锚(推荐) */
+  simStart?: string;
   tickRealMs: number;
 }
 
