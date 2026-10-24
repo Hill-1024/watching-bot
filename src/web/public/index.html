@@ -121,6 +121,19 @@
   .feed .text { font-size: 13px; color: var(--fg); }
   .empty { color: var(--dim); font-size: 13px; padding: 12px 0; }
 
+  /* 活动日志 */
+  .feed.activity .item { padding: 8px 0; }
+  .feed.activity .head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+  .feed.activity .tagk { font-family: var(--mono); font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--panel-2); }
+  .tagk.thinking { color: var(--sleep); }
+  .tagk.text { color: var(--ok); }
+  .tagk.tool_call { color: var(--accent); }
+  .tagk.tool_result { color: var(--dim); }
+  .tagk.error { color: var(--err); }
+  .feed.activity .text { font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  .feed.activity .item.kind-thinking .text { color: var(--dim); font-style: italic; }
+  .feed.activity .item.kind-tool_call .text, .feed.activity .item.kind-tool_result .text { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+
   /* sparkline */
   .srow { display: grid; grid-template-columns: 76px 1fr; gap: 12px; align-items: center; padding: 4px 0; }
   .srow .name { font-size: 13px; color: var(--dim); }
@@ -254,6 +267,15 @@
         <div id="sparks"><div class="empty">等待数据…</div></div>
       </section>
 
+      <section class="card" style="grid-column: 1 / -1">
+        <h2>活动日志 <small>思维链 / 输出 / 工具调用,实时</small>
+          <label style="display:inline-flex;align-items:center;gap:6px;margin:0 0 0 14px;font-size:12px;cursor:pointer">
+            <input type="checkbox" id="act-think" checked style="width:auto;height:auto" /> 思考
+          </label>
+        </h2>
+        <div class="feed activity" id="activity" style="max-height:420px"><div class="empty">加载中…</div></div>
+      </section>
+
     </div>
   </main>
 </div>
@@ -314,8 +336,10 @@ function enter() {
   refresh();
   loadModel();
   loadHistory();
+  loadActivity();
   setInterval(refresh, 2000);
   setInterval(loadHistory, 10000);
+  setInterval(loadActivity, 2000);
 }
 
 async function post(path, body) {
@@ -469,8 +493,7 @@ async function loadInjections() {
   }).join("");
 }
 const SPARK_VARS = VARS;
-async function loadHistory() {
-  let h;
+async function loadHistory() {  let h;
   try { h = await (await api("/api/history")).json(); } catch { return; }
   if (!h.length) return;
   $("sparks").innerHTML = SPARK_VARS.map(([k, label, min, max]) => {
@@ -484,6 +507,34 @@ async function loadHistory() {
       <svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${label}历史曲线"><path d="${path}"/></svg></div>`;
   }).join("");
 }
+
+// ---------- 活动日志(增量轮询) ----------
+let actSeq = 0;
+let actInit = false;
+async function loadActivity() {
+  let data;
+  try { data = await (await api("/api/activity?after=" + actSeq)).json(); } catch { return; }
+  const showThinking = $("act-think").checked;
+  const box = $("activity");
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  if (!actInit) { box.innerHTML = ""; actInit = true; }
+  const tags = { thinking: "思考", text: "输出", tool_call: "调用", tool_result: "结果", error: "错误" };
+  for (const e of data.entries) {
+    if (e.kind === "thinking" && !showThinking) continue;
+    const div = document.createElement("div");
+    div.className = "item kind-" + e.kind;
+    div.innerHTML = `<div class="head"><span class="tagk tagk-${e.kind}">${tags[e.kind] ?? e.kind}</span>` +
+      `<span class="t">${new Date(e.tsSim).toLocaleString("zh-CN")}</span></div><div class="text"></div>`;
+    div.querySelector(".text").textContent = e.text;
+    box.appendChild(div);
+  }
+  actSeq = data.lastSeq ?? actSeq;
+  while (box.children.length > 400) box.removeChild(box.firstChild);
+  if (data.entries.length && nearBottom) box.scrollTop = box.scrollHeight;
+}
+$("act-think").addEventListener("change", () => {
+  actSeq = 0; actInit = false; $("activity").innerHTML = `<div class="empty">加载中…</div>`; loadActivity();
+});
 
 boot();
 </script>

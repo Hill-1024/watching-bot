@@ -64,6 +64,12 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
     res.json(deps.repo.recentInjections(80));
   });
 
+  /** 活动日志:思维链/模型输出/工具调用(增量拉取) */
+  app.get("/api/activity", auth, (req, res) => {
+    const after = Number(req.query.after ?? 0) || 0;
+    res.json(deps.core.activitySince(after));
+  });
+
   app.post("/api/vars", auth, (req, res) => {
     const { name, value } = req.body as { name?: string; value?: number };
     if (typeof name !== "string" || typeof value !== "number" || !Number.isFinite(value)) {

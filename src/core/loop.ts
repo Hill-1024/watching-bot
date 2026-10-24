@@ -1,3 +1,5 @@
+import type { ActivityEntry } from "./activity.js";
+
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ModuleBus } from "../bus/types.js";
 import type { AppConfig } from "../config.js";
@@ -109,6 +111,27 @@ export class AgentCore implements CoreCommands, MachineHost {
   /** 模块热插拔后刷新 agent 工具集与 capabilities section(由 index.ts 注入) */
   refreshAgentTools: () => void = () => {};
 
+  // ---------- 活动日志(思维链/输出/工具调用,内存环形缓冲,面板消费) ----------
+
+  private activitySeq = 0;
+  private readonly activityBuf: ActivityEntry[] = [];
+  private static readonly ACTIVITY_CAP = 400;
+  private static readonly ACTIVITY_TEXT_CAP = 4000;
+
+  private pushActivity(kind: ActivityEntry["kind"], text: string): void {
+    const trimmed = text.slice(0, AgentCore.ACTIVITY_TEXT_CAP);
+    this.activityBuf.push({ seq: ++this.activitySeq, tsSim: this.clock.simNow(), kind, text: trimmed });
+    if (this.activityBuf.length > AgentCore.ACTIVITY_CAP) this.activityBuf.shift();
+  }
+
+  /** 面板拉取:after 之后的活动条目 */
+  activitySince(after: number): { entries: ActivityEntry[]; lastSeq: number } {
+    return {
+      entries: this.activityBuf.filter((e) => e.seq > after),
+      lastSeq: this.activitySeq,
+    };
+  }
+
   // ---------- 生命周期 ----------
 
   start(initialSnapshot: StateSnapshot): void {
@@ -130,15 +153,29 @@ export class AgentCore implements CoreCommands, MachineHost {
         this.events.emit({ type: "turn_end", toolNames, textLen });
       } else if (event.type === "message_end") {
         const m = event.message as { role?: string; content?: unknown; stopReason?: string; errorMessage?: string };
-        if (m.role === "assistant") {
-          const tools = Array.isArray(m.content)
-            ? (m.content as { type: string; name?: string }[]).filter((c) => c.type === "toolCall").map((c) => c.name ?? "")
-            : [];
+        if (m.role === "assistant" && Array.isArray(m.content)) {
+          for (const part of m.content as { type: string; thinking?: string; text?: string; name?: string; arguments?: unknown }[]) {
+            if (part.type === "thinking" && part.thinking) this.pushActivity("thinking", part.thinking);
+            else if (part.type === "text" && part.text) this.pushActivity("text", part.text);
+            else if (part.type === "toolCall") {
+              this.pushActivity("tool_call", `${part.name} ${JSON.stringify(part.arguments ?? {})}`);
+            }
+          }
+          if (m.errorMessage) this.pushActivity("error", String(m.errorMessage));
+          const tools = (m.content as { type: string; name?: string }[]).filter((c) => c.type === "toolCall").map((c) => c.name ?? "");
           const text = this.assistantTextLen(m) > 0 ? this.assistantText(m) : "";
           this.log(
             `[agent] stop=${m.stopReason}${m.errorMessage ? ` err=${m.errorMessage}` : ""}${tools.length ? ` tools=[${tools.join(",")}]` : ""}${text ? ` «${text.slice(0, 60)}»` : ""}`,
           );
         }
+      } else if (event.type === "tool_execution_end") {
+        const r = event.result as { content?: { type: string; text?: string }[] };
+        const brief = Array.isArray(r?.content)
+          ? (r.content as { type: string; text?: string }[]).filter((c) => c.type === "text").map((c) => c.text ?? "").join(" ")
+          : "";
+        this.pushActivity(event.isError ? "error" : "tool_result",
+          `${event.toolName} → ${brief || (event.isError ? "(失败)" : "(无文本结果)")}`,
+        );
       } else if (event.type === "tool_execution_start") {
         this.events.emit({
           type: "tool_call",
