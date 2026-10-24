@@ -33,7 +33,7 @@ export function buildLlm(cfg: ModelConfig): LlmHandles {
   const models: MutableModels = builtinModels();
 
   if (cfg.baseUrl) {
-    const apiKey = process.env[cfg.apiKeyEnv] ?? "";
+    const apiKey = cfg.apiKey || process.env[cfg.apiKeyEnv] || "";
     models.setProvider(
       createProvider({
         id: "watching-bot-custom",
@@ -69,17 +69,19 @@ export function buildLlm(cfg: ModelConfig): LlmHandles {
     );
   }
 
-  const model = models.getModel(cfg.provider, cfg.model);
+  // 配了 baseUrl 时自定义端点是唯一事实来源,provider 字段不参与解析
+  const providerId = cfg.baseUrl ? "watching-bot-custom" : cfg.provider;
+  const model = models.getModel(providerId, cfg.model);
   if (!model) {
     const known = models.getProviders().map((p) => p.id).join(", ");
     throw new Error(
-      `pi 模型网关里没有 ${cfg.provider}/${cfg.model}。可用 provider:${known}。` +
+      `pi 模型网关里没有 ${providerId}/${cfg.model}。可用 provider:${known}。` +
         (cfg.baseUrl ? "" : ` 若为自建/未收录端点,请在配置里补 model.baseUrl(OpenAI 兼容)。`),
     );
   }
 
   const resolveApiKey = (): string | undefined =>
-    process.env[cfg.apiKeyEnv] || getEnvApiKey(cfg.provider) || undefined;
+    cfg.apiKey || process.env[cfg.apiKeyEnv] || getEnvApiKey(cfg.provider) || undefined;
 
   const streamFn: StreamFn = (m, context, options) =>
     models.streamSimple(m as never, context, { ...options, apiKey: resolveApiKey() });

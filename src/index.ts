@@ -6,13 +6,13 @@ import { ModuleHost } from "./bus/host.js";
 import type { MachineHost } from "./core/machine.js";
 import { SleepMachine } from "./core/machine.js";
 import { SimClock, MIN, HOUR, fmtSim } from "./core/clock.js";
-import { loadConfig, modelApiKey, type AppConfig } from "./config.js";
+import { loadConfig, type AppConfig } from "./config.js";
 import { createAgent } from "./core/agent.js";
 import { AgentCore } from "./core/loop.js";
 import { Emitter, type CoreEvent } from "./core/events.js";
 import { Injector } from "./core/inject.js";
 import { buildCoreTools } from "./core/tools.js";
-import { buildLlm } from "./core/llm.js";
+import { ModelManager } from "./core/model-manager.js";
 import { MemoryStore } from "./memory/files.js";
 import { runConsolidation } from "./memory/consolidation.js";
 import { mockModuleFactory, type MockModule } from "./modules/mock.js";
@@ -70,11 +70,17 @@ async function main(): Promise<void> {
   const repo = new Repo(openDb(cfg.memory.dataDir));
   const memory = new MemoryStore(cfg.memory);
 
-  // ---- LLM:faux(测试剧本)或真实 OpenAI 兼容端点 ----
+  // ---- LLM:faux(测试剧本)或真实模型(pi 网关 + ModelManager 热切换) ----
   const faux = process.env.WATCHING_BOT_FAUX_LLM === "1";
-  const llm = faux ? installFauxLlm() : buildLlm(cfg.model);
-  const apiKey = faux ? "" : modelApiKey(cfg.model);
-  if (!faux && !apiKey) log("[warn] 未设置模型 API key 环境变量,LLM 调用将失败");
+  const modelManager = new ModelManager(cfg.model, { dataDir: cfg.memory.dataDir, log, faux });
+  if (!faux) {
+    const v = modelManager.view();
+    log(`模型: ${v.provider}/${v.model}${v.baseUrl ? ` @ ${v.baseUrl}` : " (pi 目录端点)"}${v.apiKeySet ? "" : " [warn] 未配置 API key,调用将失败"}`);
+  }
+  const fauxLlm = faux ? installFauxLlm() : null;
+  /** 当前模型句柄(面板热切换后随之变化) */
+  const cur = () => (fauxLlm ? { model: fauxLlm.model, streamFn: fauxLlm.streamFn } : modelManager.current);
+  const curApiKey = (): string | undefined => (fauxLlm ? undefined : modelManager.apiKey());
 
   // ---- 模块总线 ----
   const bus = new ModuleHost({ clock, log, moduleConfigs: cfg.moduleConfig });
@@ -101,25 +107,27 @@ async function main(): Promise<void> {
   // ---- pi Agent ----
   const persona = readFileSync(resolve("persona/persona.md"), "utf-8");
   const events = new Emitter<CoreEvent>();
-  const injector = new Injector(String(llm.model.api), repo, () => clock.simNow());
+  const injector = new Injector(() => cur().model.api, repo, () => clock.simNow());
   const summarize = async (messages: AgentMessage[]) => {
+    const { model, streamFn } = cur();
     const { text } = await generateSummaryWithUsage(
       messages,
-      llm.model as never,
+      model as never,
       8192,
-      apiKey,
+      curApiKey(),
       undefined,
       undefined,
       "这是一位过日常生活的虚拟角色的对话记录。摘要保留:人物与关系、情绪事件、重要约定与承诺、未完成的事;忽略工具调用的技术细节。",
       undefined,
       "off",
-      llm.streamFn,
+      streamFn,
     );
     return text;
   };
+  const initLlm = cur();
   const { agent } = createAgent({
-    model: llm.model as never,
-    streamFn: llm.streamFn,
+    model: initLlm.model as never,
+    streamFn: initLlm.streamFn,
     systemPrompt: persona,
     sections: {
       memory: memory.indexText(),
@@ -151,10 +159,11 @@ async function main(): Promise<void> {
   });
   core.runConsolidation = async () => {
     log("[memory] 入睡:开始睡眠期归并……");
+    const { model, streamFn } = cur();
     await runConsolidation(
       {
-        model: llm.model as never,
-        streamFn: llm.streamFn,
+        model: model as never,
+        streamFn,
         memory,
         weekSize: cfg.memory.consolidateDiaryDaysToWeek,
         onSleepCorrection: (moodDelta, stressDelta, reason) => {
@@ -213,9 +222,9 @@ async function main(): Promise<void> {
   const judge = new Judge({
     events: core.events,
     manager,
-    model: llm.model as never,
-    streamFn: llm.streamFn,
-    apiKey,
+    getModel: () => cur().model as never,
+    getStreamFn: () => cur().streamFn,
+    getApiKey: () => curApiKey(),
     recentTranscript: () => transcriptToText(agent.state.messages, 4000),
     log,
   });
@@ -230,6 +239,14 @@ async function main(): Promise<void> {
       core,
       bus,
       repo,
+      modelManager,
+      onModelChanged: () => {
+        const h = modelManager.current;
+        agent.state.model = h.model as never;
+        agent.streamFunction = h.streamFn;
+        core.refreshMemorySection();
+        log("[panel] 模型句柄已热替换到 agent");
+      },
       port: cfg.panel.port,
       token: process.env[cfg.panel.tokenEnv] ?? "",
       log,

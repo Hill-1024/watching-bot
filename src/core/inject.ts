@@ -24,7 +24,7 @@ export class Injector {
   private pendingEnv = new Map<EnvKind, number>();
 
   constructor(
-    private readonly modelApi: string,
+    private readonly getModelApi: () => string,
     private readonly repo: Repo,
     private readonly simNow: () => number,
   ) {}
@@ -89,7 +89,7 @@ export class Injector {
     return {
       role: "assistant",
       content: [{ type: "text", text: `<feeling>${text}</feeling>` }],
-      api: this.modelApi,
+      api: this.getModelApi(),
       provider: "watching-bot",
       model: "inner-voice",
       usage: zeroUsage,

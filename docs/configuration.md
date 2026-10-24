@@ -2,6 +2,8 @@
 
 主配置 `config/default.json`(可用 `WATCHING_BOT_CONFIG` 换路径)。所有状态变量、阈值、节流参数都是配置,加减维度不改代码。密钥一律走环境变量,不落配置文件。
 
+> **面板热切换**:管理面板的「模型」区可以在不重启的情况下切换 provider/模型(写 `data/model.json` 覆盖层,优先于本文件的 model 段;删掉该文件即回退到文件配置)。API key 也可在面板写入(明文存 `data/model.json`,该目录已 gitignore)。
+
 ## 模型接入(复用 pi 网关)
 
 `src/core/llm.ts` 直接用 pi 的模型网关(`builtinModels()`,40+ 内置 provider),不自研。`model.baseUrl` 是否配置决定走哪条路径:

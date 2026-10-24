@@ -23,7 +23,7 @@ npm run mock:onebot                                    # 终端 1:假 OneBot 服
 WATCHING_BOT_FAUX_LLM=1 WATCHING_BOT_TIMESCALE=300 npm start   # 终端 2:300 倍时间飞驰
 ```
 
-面板:`http://127.0.0.1:8080` —— 实时状态曲线、注入流水,可直接改状态值、触发记忆归并、强制醒睡、热调 timeScale、热插拔模块。
+面板:`http://127.0.0.1:8080` —— 实时状态曲线、注入流水;直接改状态值、触发记忆归并、强制醒睡、热调 timeScale、热插拔模块、**模型热切换**(pi 目录 40+ provider 或自定义端点,重启保持)。
 
 接真实模型与真实 QQ(docker compose):见 **[docs/deployment.md](docs/deployment.md)**。
 

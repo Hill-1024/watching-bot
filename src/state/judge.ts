@@ -6,9 +6,10 @@ import type { StateManager } from "./manager.js";
 export interface JudgeDeps {
   events: Emitter<CoreEvent>;
   manager: StateManager;
-  model: Model<any>;
-  streamFn: StreamFn;
-  apiKey: string;
+  /** 每次调用时取当前模型/流函数/密钥(支持面板热切换模型) */
+  getModel(): Model<any>;
+  getStreamFn(): StreamFn;
+  getApiKey(): string | undefined;
   /** 最近对话文本(监控 agent 本体,与模块无关) */
   recentTranscript(): string;
   log?(msg: string): void;
@@ -75,7 +76,9 @@ export class Judge {
       ] as AgentMessage[],
       tools: [],
     };
-    const stream = await this.deps.streamFn(this.deps.model as never, context as never, { apiKey: this.deps.apiKey });
+    const stream = await this.deps.getStreamFn()(this.deps.getModel() as never, context as never, {
+      apiKey: this.deps.getApiKey(),
+    });
     const message = await stream.result();
     const text = ((message.content as { type: string; text?: string }[]) ?? [])
       .filter((c) => c.type === "text")

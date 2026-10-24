@@ -5,6 +5,7 @@ import type { ModuleBus } from "../bus/types.js";
 import type { SimClock } from "../core/clock.js";
 import { fmtSim } from "../core/clock.js";
 import type { AgentCore } from "../core/loop.js";
+import type { ModelManager, ModelOverride } from "../core/model-manager.js";
 import type { Repo } from "../store/db.js";
 
 export interface PanelDeps {
@@ -12,6 +13,9 @@ export interface PanelDeps {
   core: AgentCore;
   bus: ModuleBus;
   repo: Repo;
+  modelManager: ModelManager;
+  /** 面板切换模型后,把新句柄热替换到 pi Agent(在 index.ts 闭包里做) */
+  onModelChanged(): void;
   /** 模块热插拔 */
   setModule(name: string, enable: boolean): Promise<{ ok: boolean; error?: string }>;
   port: number;
@@ -119,6 +123,32 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
     } catch (err) {
       res.status(500).json({ ok: false, error: String(err) });
     }
+  });
+
+  // ---------- 模型配置(热切换) ----------
+
+  app.get("/api/model", auth, (_req, res) => {
+    res.json({ ...deps.modelManager.view(), providers: deps.modelManager.providers() });
+  });
+
+  app.get("/api/model/catalog", auth, (req, res) => {
+    const provider = typeof req.query.provider === "string" ? req.query.provider : "";
+    if (!provider) {
+      res.status(400).json({ error: "需要 provider 参数" });
+      return;
+    }
+    res.json({ provider, models: deps.modelManager.modelsOf(provider) });
+  });
+
+  app.post("/api/model", auth, (req, res) => {
+    const body = req.body as ModelOverride;
+    const r = deps.modelManager.apply(body);
+    if (!r.ok) {
+      res.status(400).json(r);
+      return;
+    }
+    deps.onModelChanged();
+    res.json({ ok: true, model: deps.modelManager.view() });
   });
 
   app.use(express.static(resolve("src/web/public")));

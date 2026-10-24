@@ -6,6 +6,8 @@ export interface ModelConfig {
   baseUrl: string;
   model: string;
   apiKeyEnv: string;
+  /** 面板覆盖层写入的明文 key(优先于环境变量);基础配置一般不填 */
+  apiKey?: string;
   contextWindow: number;
 }
 
