@@ -119,6 +119,7 @@ API key 按优先级:`apiKeyEnv` 指定的环境变量 → pi 标准环境变量
 | `WATCHING_BOT_FAUX_LLM=1` | faux 剧本 LLM(测试) |
 | `WATCHING_BOT_TIMESCALE` | 覆盖 timeScale |
 | `WATCHING_BOT_CONFIG` | 配置文件路径 |
+| `WATCHING_BOT_STATE_FILE` | 快照文件路径(默认 `data/state.json`;隔离测试实例用) |
 | `WATCHING_BOT_PANEL_TOKEN` | 面板 token |
 | `NAPCAT_URL` / `NAPCAT_TOKEN` | 覆盖 napcat 模块连接参数 |
 | `QQ_ACCOUNT` | compose 里 NapCat 的 QQ 号 |

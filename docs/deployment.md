@@ -19,6 +19,7 @@ WATCHING_BOT_FAUX_LLM=1 WATCHING_BOT_TIMESCALE=300 npm start
 打开面板 `http://127.0.0.1:8080`(未设 token 则免鉴权),你会看到:
 
 - 模拟时间飞驰,状态五维曲线起伏;
+- Vue 3 面板的八个页面:概览、状态与历史、活动日志、感知注入、Token 统计、长期记忆、模型、模块与系统;活动日志与记忆摘要会自动增量刷新,状态输入在轮询期间不会被覆盖;
 - faux 剧本驱动的完整行为链:感知消息 → list_chats → read_messages → 收藏表情包 → 发表情包 → 引用回复 → mark_read;疲惫三档注入 → 自愿睡/强制睡 → 睡眠期归并(写日记+更新 MEMORY.md)→ 闹钟响铃赖床 → 疲惫恢复自然醒;
 - `data/memories/` 里出现日记,`data/MEMORY.md` 索引被归并更新。
 

@@ -23,7 +23,9 @@ npm run mock:onebot                                    # 终端 1:假 OneBot 服
 WATCHING_BOT_FAUX_LLM=1 WATCHING_BOT_TIMESCALE=300 npm start   # 终端 2:300 倍时间飞驰
 ```
 
-面板:`http://127.0.0.1:8080` —— 实时状态曲线、注入流水;直接改状态值、触发记忆归并、强制醒睡、热调 timeScale、热插拔模块、**模型热切换**(pi 目录 40+ provider 或自定义端点,重启保持)。
+面板:`http://127.0.0.1:8080` —— Vue 3 管理后台:概览、状态与历史、活动日志、感知注入、**Token 统计**(总/输入/输出/缓存命中/命中率五条折线,支持今天、昨天、7/14/30/90 天与自定义起止日期)、长期记忆、模型热切换、模块与系统。状态数值支持步进、滑块与失焦提交,2 秒轮询只更新展示层,不会覆盖正在输入的内容;日志与记忆摘要自动增量刷新。
+
+> 面板前端是 `src/web/public/` 下的 Vue 3 ESM 应用,`vendor/vue.esm-browser.prod.js` 已内置,不需要 Vite 或其他构建步骤,`npm start` 直接可用。
 
 接真实模型与真实 QQ(docker compose):见 **[docs/deployment.md](docs/deployment.md)**。
 
@@ -59,10 +61,10 @@ src/
 ├── state/          # 五维规则引擎(纯函数)、状态管理器、judge
 ├── modules/
 │   ├── napcat/     # 唯一了解 QQ 的地方:OneBot 11 WS client + 18 工具 + 未读游标 + 节流
-│   └── mock.ts     # 测试假模块(证明解耦)
+│   └── builtin/    # 日常生理:咖啡提神与主人每日配给
 ├── memory/         # 睡眠期长期记忆归并(日记 + MEMORY.md 索引 + 周归并)
-├── store/          # SQLite(状态历史/注入/睡眠记录/闹钟/事件)+ state.json 快照
-└── web/            # 管理面板(读写)
+├── store/          # SQLite(状态历史/注入/活动日志/睡眠记录/闹钟/事件/token 用量)+ state.json 快照
+└── web/            # 管理面板(Express API + Vue 3 页面,无构建步骤)
 third_party/napcat  # NapCatQQ 仓库指针(submodule,仅协议/源码参考,不参与构建)
 tools/              # mock-onebot-server(假 QQ)、调试脚本
 tests/              # 状态引擎/文案安全/模型网关单测
