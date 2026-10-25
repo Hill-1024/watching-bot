@@ -41,6 +41,15 @@ WATCHING_BOT_API_KEY=你的key WATCHING_BOT_PANEL_TOKEN=面板密码 npm start
 
 ## 方式三:Docker Compose(推荐长期挂机)
 
+预构建镜像(linux/amd64 + linux/arm64,由 GitHub Actions 构建并冒烟验证):
+
+```bash
+docker pull ghcr.io/hill-1024/watching-bot:latest
+# 或锁定版本:ghcr.io/hill-1024/watching-bot:0.1.0
+```
+
+仓库自带的 `docker-compose.yml` 已指向该镜像,`docker compose up -d` 直接拉取;想从源码构建则用 `docker compose up -d --build`。
+
 ```bash
 # 准备 .env(同目录)
 cat > .env <<'EOF'

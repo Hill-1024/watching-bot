@@ -1,5 +1,12 @@
 # watching-bot
 
+[![docker](https://github.com/Hill-1024/watching-bot/actions/workflows/docker.yml/badge.svg)](https://github.com/Hill-1024/watching-bot/actions/workflows/docker.yml)
+[![image](https://img.shields.io/badge/ghcr.io-watching--bot-2496ED?logo=docker)](https://github.com/Hill-1024/watching-bot/pkgs/container/watching-bot)
+
+```bash
+docker pull ghcr.io/hill-1024/watching-bot:latest   # amd64 / arm64
+```
+
 自循环拟人 agent:以 [pi](https://github.com/earendil-works/pi)(`pi-agent-core` + `pi-ai`,库模式)为基底,外挂一套 **LLM 不可见的隐藏状态机**(疲惫/心情/烦躁/压力/社交电量)与**睡醒调度器**。状态达到阈值时通过「混合注入」影响模型的内心独白,让它真的会困、会烦、会赖床。QQ 能力由 [NapCat](https://github.com/NapNeko/NapCatQQ)(OneBot 11)通过模块总线以黑箱工具提供。
 
 ## 它的一天
