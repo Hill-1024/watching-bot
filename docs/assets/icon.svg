@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">watching-bot</title>
+  <defs>
+    <linearGradient id="bg" x1="16" y1="8" x2="112" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1a1f27"/>
+      <stop offset=".55" stop-color="#10141a"/>
+      <stop offset="1" stop-color="#090b0f"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="34" y1="44" x2="98" y2="92" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f6ddb0"/>
+      <stop offset=".45" stop-color="#d3a05f"/>
+      <stop offset="1" stop-color="#a97132"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(64 66) rotate(90) scale(52)">
+      <stop stop-color="#d3a05f" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#d3a05f" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="3" y="3" width="122" height="122" rx="30" fill="url(#bg)" stroke="#242b35" stroke-width="1.5"/>
+  <rect x="3.75" y="3.75" width="120.5" height="120.5" rx="29.25" stroke="#ffffff" stroke-opacity=".04" stroke-width="1.5"/>
+  <circle cx="64" cy="64" r="52" fill="url(#glow)"/>
+  <circle cx="64" cy="64" r="41" stroke="url(#gold)" stroke-opacity=".32" stroke-width="1.2"/>
+  <path d="M36.5 48.5 L47.5 84 L64 60.5 L80.5 84 L91.5 48.5" stroke="url(#gold)" stroke-width="6.4" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft)"/>
+  <circle cx="94.5" cy="31.5" r="3.6" fill="#f6ddb0"/>
+  <circle cx="94.5" cy="31.5" r="8.2" stroke="#f6ddb0" stroke-opacity=".16"/>
+</svg>

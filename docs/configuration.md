@@ -48,6 +48,8 @@ API key 按优先级:`apiKeyEnv` 指定的环境变量 → pi 标准环境变量
 
 `WATCHING_BOT_FAUX_LLM=1` 启动 → 用 pi 自带的 faux provider 跑一个规则剧本,全链路不需要任何 API key。见 `docs/deployment.md`。
 
+> 模型热切换会同步重建 pi 句柄;agent 的 compaction 窗口读取当前生效的 `model.contextWindow`(含 `data/model.json` 覆盖),不会停留在启动时的旧值。面板显示的 provider/model 与实际 agent 使用的一致。
+
 ## time:时间模型
 
 | 字段 | 默认 | 说明 |
@@ -112,6 +114,17 @@ API key 按优先级:`apiKeyEnv` 指定的环境变量 → pi 标准环境变量
 
 两套运行时都走 OneBot 11,SnowLuma 模块复用 NapCat 的同一套 18 个工具,并默认共用 `data/modules/napcat.db` 与 `data/modules/memes`(切换后消息、未读、表情包延续)。`moduleConfig.snowluma` 与 napcat 同构,默认 WS 也是 `ws://127.0.0.1:3001`;若两个运行时同时开着,需要给 SnowLuma 配一个不同的 `url` 并在它自己的 WebUI 里监听对应端口。切换只停/启 agent 侧模块,不负责启动或停止 QQ 进程。
 
+NapCat 卡片还会读取本地 WebUI 配置(默认 `runtime/napcat-node/napcat/config/webui.json`),展示登录 token;保存新端口会原子写回该文件,面板随后轮询新端口并等待 NapCat 重启。Docker 等路径可用 `NAPCAT_WEBUI_CONFIG` 指定配置文件,或用 `NAPCAT_WEBUI_TOKEN` 直接给 token。
+
+### builtin:主人与咖啡
+
+`moduleConfig.builtin`:
+
+- `master.name` / `master.qq`:主人称呼与 QQ;QQ 用于睡眠私聊唤醒的主人豁免,以及喝完咖啡后上 QQ 讨要的目标。
+- `coffee.dailyQuota` / `coffee.refillSimHour`:每日默认配额与模拟时间送达小时。
+
+面板可编辑称呼、QQ、每日配额;保存时原子写入 `data/builtin.json`(gitignored),并热应用。配额修改从下一次每日配给生效,今日余量可用面板补货按钮调整。
+
 ## panel
 
 `enabled` / `port`(8080)/ `tokenEnv`(`WATCHING_BOT_PANEL_TOKEN`,未设 = 无鉴权,仅限本机调试用)。
@@ -129,4 +142,5 @@ API key 按优先级:`apiKeyEnv` 指定的环境变量 → pi 标准环境变量
 | `WATCHING_BOT_PANEL_TOKEN` | 面板 token |
 | `NAPCAT_URL` / `NAPCAT_TOKEN` | 覆盖 napcat 模块连接参数 |
 | `SNOWLUMA_URL` / `SNOWLUMA_TOKEN` | 覆盖 snowluma 模块连接参数 |
+| `NAPCAT_WEBUI_CONFIG` / `NAPCAT_WEBUI_TOKEN` | 覆盖面板读取的 NapCat WebUI 配置路径/token |
 | `QQ_ACCOUNT` | compose 里 NapCat 的 QQ 号 |

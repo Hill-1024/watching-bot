@@ -1,6 +1,6 @@
 # 模块开发指南
 
-一切外部能力(IM、搜索、沙箱电脑…)都通过**模块总线**接入。写一个模块只需要实现 `BotModule` 契约并注册工厂 —— 核心与状态管理零改动,对 agent 而言它只是多了一堆黑箱工具。契约见 `src/bus/types.ts`,完整示例看 `src/modules/napcat/`(生产级)与 `src/modules/mock.ts`(最小)。
+一切外部能力(IM、搜索、沙箱电脑…)都通过**模块总线**接入。写一个模块只需要实现 `BotModule` 契约并注册工厂 —— 核心与状态管理零改动,对 agent 而言它只是多了一堆黑箱工具。契约见 `src/bus/types.ts`,完整示例看 `src/modules/napcat/`(生产级)、`src/modules/snowluma/`(复用实现)与 `src/modules/builtin/`(最小)。
 
 ## 契约
 
@@ -46,12 +46,12 @@ bus.registerFactory("websearch", () => new MyModule());
 // config/default.json 的 modules 数组加 "websearch"
 ```
 
-面板的模块热插拔走 `bus.startOne/stopOne`,注册了工厂即可被开关。
+面板的普通模块热插拔走 `bus.startOne/stopOne`,注册了工厂即可被开关。`napcat` 与 `snowluma` 例外:它们在「QQ 接入」选择器里互斥切换,选择持久化到 `data/qq-backend.json`;直接走 `/api/modules` 停用它们会被拒绝。
 
 ## 设计规则
 
 1. **工具是黑箱**:工具的 name/description/参数 schema 由模块自述 —— 写 description 时直接对「角色本人」说话(参考 napcat 工具的写法:「看看最近有哪些会话,各自有多少未读」)。
-2. **感知归一化**:上报用开放小枚举 `kind: message | mention | mention_storm | alert` + `intensity 1-5`。高频事件(如连环@)不必自己判断风暴 —— 只管上报 `mention`,核心按时间窗聚合成 `mention_storm`。新模块优先复用现有 kind;确实要新 kind 时在核心文案表(`src/core/copy.ts`)加一行映射。
+2. **感知归一化**:上报用开放小枚举 `kind: message | mention | mention_storm | alert | stimulant` + `intensity 1-5`。高频事件(如连环@)不必自己判断风暴 —— 只管上报 `mention`,核心按时间窗聚合成 `mention_storm`。新模块优先复用现有 kind;确实要新 kind 时在核心文案表(`src/core/copy.ts`)加一行映射。`stimulant` 是 builtin 咖啡使用的生理摄入通道。
 3. **时间用 `ctx.simNow()`**,不要用 `Date.now()`(除非是纯真实时间的操作,如发请求的 timeout)。
 4. **自带持久化**:模块数据存自己的库(参考 napcat 的 `data/modules/napcat.db`),核心不读模块库,模块不读核心库。
 5. **语义标签**:若某工具代表「社交行为」,给它打 `social` 标签 —— 状态管理器会消耗社交电量/提升心情。它不认识你的工具名,只认识标签。

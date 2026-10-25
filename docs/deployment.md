@@ -48,6 +48,8 @@ docker pull ghcr.io/hill-1024/watching-bot:latest
 # 或锁定版本:ghcr.io/hill-1024/watching-bot:0.1.1
 ```
 
+正式镜像**只由 `v*` 版本 tag 构建**,`latest` 跟随最新 release;main 分支推送不会发布镜像。当前版本 v0.1.1。
+
 仓库自带的 `docker-compose.yml` 已指向该镜像,`docker compose up -d` 直接拉取;想从源码构建则用 `docker compose up -d --build`。
 
 ```bash
@@ -69,7 +71,18 @@ docker compose logs -f watching-bot   # 看日志
 1. **NapCat 登录**:浏览器开 `http://127.0.0.1:6099` → 扫码登录 QQ。NapCat 数据在 `napcat-data` 卷里,重启容器不用重新扫码。
 2. **配 OneBot WS**:NapCat WebUI → 网络配置 → 新建 → **WebSocket 服务器**,端口填 `3001`(容器内),勾选启用。watching-bot 侧已通过 `NAPCAT_URL=ws://napcat:3001` 指向它,无需改配置。
 3. **模型**:compose 挂载了 `./config`,直接编辑 `config/default.json` 后 `docker compose restart watching-bot` 生效。
-4. **面板**:`http://127.0.0.1:8080/?token=<WATCHING_BOT_PANEL_TOKEN>`。
+4. **面板**:`http://127.0.0.1:8080/?token=<WATCHING_BOT_PANEL_TOKEN>`。NapCat 卡片会显示 WebUI 登录 token,也可在面板里保存自定义 WebUI 端口;端口修改后需要重启 NapCat 运行时,面板会等待新端口就绪。
+
+### SnowLuma(可选,非默认)
+
+SnowLuma 与 NapCat 互斥,默认仍使用 NapCat。SnowLuma 不在当前 compose 的默认服务里,需要自行运行它的 OneBot WS:
+
+1. 启动 SnowLuma(官方发行包或你自己的容器),在它的 WebUI 里配置 OneBot **WebSocket 服务器**;
+2. 给 bot 一个可达地址:容器部署用 `SNOWLUMA_URL=ws://<snowluma-host>:3001`,本机默认 `ws://127.0.0.1:3001`;
+3. 如需独立 token,配置 `moduleConfig.snowluma.token` 或 `SNOWLUMA_TOKEN`;
+4. 打开面板「模块与系统 → QQ 接入」选择 SnowLuma。选择写入 `data/qq-backend.json`,重启后保持。
+
+两套运行时共用 `data/modules/napcat.db` 与 `data/modules/memes`;同一个 QQ 号不能同时让 NapCat 和 SnowLuma 在线,切换前停掉另一个运行时。面板只切换 agent 侧模块,不负责启动/停止 SnowLuma 进程。
 
 ### 数据与备份
 
@@ -79,6 +92,15 @@ docker compose logs -f watching-bot   # 看日志
 | NapCat 登录态 | `napcat-data` 卷 | `docker volume` 管理 |
 
 ### 升级
+
+使用发布镜像时:
+
+```bash
+docker compose pull watching-bot
+docker compose up -d
+```
+
+版本镜像只由版本 tag 构建;想固定版本,把 compose 的 `image` 改成 `:0.1.1`。从源码构建时:
 
 ```bash
 git pull
@@ -96,6 +118,9 @@ docker compose up -d
 **Q: 日志里反复「连接断开,Ns 后重连」**
 NapCat 侧 WS 服务器没建好、端口不对或 token 不匹配。compose 场景确认 NapCat WebUI 里建的是「WebSocket **服务器**」且容器端口是 3001;bot 重连是自动的,修好配置即可。
 
+**Q: 面板切到 SnowLuma 后没有反应**
+面板只切换 agent 侧模块;SnowLuma 的 OneBot WS 需要已经在 `SNOWLUMA_URL` / `moduleConfig.snowluma.url` 上监听。确认 SnowLuma 进程已启动、端口可达,再切回 NapCat 或重试。
+
 **Q: 面板 401**
 设置了 `WATCHING_BOT_PANEL_TOKEN` 但没带 token。URL 加 `?token=xxx` 或请求头 `Authorization: Bearer xxx`。
 
@@ -106,7 +131,7 @@ NapCat 侧 WS 服务器没建好、端口不对或 token 不匹配。compose 场
 napcat 模块内置发送节流(`sendMinIntervalMs` + 随机抖动),这是特性。仍被风控就调大间隔,或减少发言频率(它本来就有不回消息的自由)。
 
 **Q: 重启后它会记得之前的事吗**
-会。`data/state.json` 恢复变量与对话上下文,长期记忆在 MEMORY.md/日记里,消息历史在模块库里。唯一简化:重启后一律以清醒态恢复(睡到一半被杀进程的,醒来继续)。
+会。`data/state.json` 恢复变量与对话上下文,长期记忆在 MEMORY.md/日记里,消息历史在模块库里;模型覆盖在 `data/model.json`,QQ 后端选择在 `data/qq-backend.json`。唯一简化:重启后一律以清醒态恢复(睡到一半被杀进程的,醒来继续)。
 
 **Q: 时区**
 模拟时间的「一天」跟宿主机时区走;compose 里默认 `TZ=Asia/Shanghai`。

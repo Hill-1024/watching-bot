@@ -48,10 +48,36 @@
 
 `src/core/llm.ts` 不自己实现任何协议细节:目录路径用 pi 的 `builtinModels()`(40+ provider、型号元数据、标准 env key 解析全部现成);自定义 OpenAI 兼容端点用 pi 的 `createProvider` + 内置 openai-completions 实现注册。我们只写"选哪条路径"的 ~40 行胶水。faux 测试同样用 pi 自带的 faux provider。
 
-## 7. NapCat 的引入方式:跨进程协议,不是库
+## 7. QQ 的引入方式:跨进程协议,不是库
 
-NapCat 是挂在 QQ 上的独立客户端。watching-bot 通过 OneBot 11 WebSocket 与它通信(napcat 模块是协议客户端封装),因此:
+NapCat 和 SnowLuma 都是挂在 QQ 上的独立运行时。watching-bot 通过 OneBot 11 WebSocket 与它们通信(`napcat` 是协议客户端封装,`snowluma` 复用同一套工具实现),因此:
 
 - `third_party/napcat` submodule 只是源码/协议参考,不参与构建运行;
-- 运行时用官方 Docker 镜像(compose 编排)或本机 shell 版;
-- "未读"这类 OneBot 没有的概念,由模块自维护游标实现 —— napcat 模块是全项目唯一了解 QQ 的地方。
+- 运行时用官方 Docker 镜像(compose 编排)或本机启动器;
+- "未读"这类 OneBot 没有的概念,由模块自维护游标实现 —— `napcat` / `snowluma` 是全项目唯一了解 QQ 的地方,核心与状态管理不知道 QQ 的存在。
+
+## 8. QQ 接入是运行时选择,不是核心分叉
+
+NapCat 与 SnowLuma 都能提供 OneBot 11,所以我们没有在 core 里加分支,而是:
+
+- 新增一个 `snowluma` 模块身份,复用 `NapcatModule` 的 18 个工具实现;
+- 用 `src/qq-backend.ts` 管理互斥选择,缺失时默认 **NapCat**,选择写入 `data/qq-backend.json`;
+- 面板「QQ 接入」只停/启 agent 侧模块,不托管 QQ 进程;Docker 由 compose 管 NapCat,SnowLuma 需要自己的运行时。
+
+这样 agent 的工具集、状态语义与消息库不因换运行时改变,切换成本停留在模块装配层。
+
+## 9. 上下文窗口跟随模型,而不是启动配置
+
+模型目录里的窗口可能远大于 `config.model.contextWindow`(例如 1M 的 `deepseek-flash` 对 128k 的基础配置)。如果 compaction 固定用启动时的 128k,agent 每轮都会压缩上千条历史,表现为"模型不响应"。
+
+因此 `createAgent` 接收的是 `contextWindow` getter,`transformContext` 每次读取当前模型管理器的生效窗口;面板热切换模型后,压缩阈值立即跟随,不会沿用旧值。
+
+## 10. 发布只认版本 tag
+
+镜像发布曾经在 main push 时也触发,导致每个普通提交都可能覆盖 `latest`。现在的约束是:
+
+- GitHub Actions 只在 `v*` tag 上构建/推送;
+- `latest` 只在版本 tag 构建时更新,跟随最新 release;
+- main 分支只用于开发和测试,不产生发布镜像。
+
+这条规则保证 `latest` 与版本标签、发布说明一致,避免"分支构建悄悄变成线上镜像"。
