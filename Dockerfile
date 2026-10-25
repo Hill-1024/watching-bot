@@ -1,11 +1,11 @@
-FROM node:22-alpine AS base
+FROM node:22-slim AS deps
 WORKDIR /app
-
-FROM base AS deps
+# better-sqlite3 需要 glibc 预编译包,故用 slim 而非 alpine(musl 会退化为源码编译)
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM base AS runtime
+FROM node:22-slim AS runtime
+WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
@@ -14,4 +14,5 @@ COPY persona ./persona
 COPY config ./config
 RUN mkdir -p data
 EXPOSE 8080
-CMD ["npx", "tsx", "src/index.ts"]
+# 用本地 tsx(不走 npx,避免运行时联网解析)
+CMD ["./node_modules/.bin/tsx", "src/index.ts"]

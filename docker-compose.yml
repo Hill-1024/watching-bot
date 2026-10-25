@@ -19,6 +19,8 @@ services:
       retries: 5
 
   watching-bot:
+    # 已发布镜像由 GitHub Actions 构建;本地构建用:docker compose up -d --build
+    image: ghcr.io/hill-1024/watching-bot:latest
     build: .
     container_name: watching-bot
     restart: unless-stopped
@@ -28,7 +30,8 @@ services:
     environment:
       - WATCHING_BOT_API_KEY=${WATCHING_BOT_API_KEY}
       - WATCHING_BOT_PANEL_TOKEN=${WATCHING_BOT_PANEL_TOKEN:-watching}
-       - WATCHING_BOT_TIMESCALE=${WATCHING_BOT_TIMESCALE:-1}
+      - WATCHING_BOT_TIMESCALE=${WATCHING_BOT_TIMESCALE:-1}
+      - WATCHING_BOT_MASTER_QQ=${WATCHING_BOT_MASTER_QQ:-0}
       - NAPCAT_URL=ws://napcat:3001
       - NAPCAT_TOKEN=${NAPCAT_TOKEN:-}
       - TZ=Asia/Shanghai

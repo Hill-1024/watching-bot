@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.github
+data
+runtime
+third_party
+.zcode
+*.log
+.env
+tools
+tests
+docs
+README.md
