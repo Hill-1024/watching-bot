@@ -41,6 +41,11 @@ export class ModuleHost implements ModuleBus {
     this.factories.set(name, factory);
   }
 
+  /** 已注册工厂名(面板展示"可启用"模块用) */
+  factoryNames(): string[] {
+    return [...this.factories.keys()];
+  }
+
   async startAll(moduleNames: string[]): Promise<void> {
     for (const name of moduleNames) {
       const factory = this.factories.get(name);

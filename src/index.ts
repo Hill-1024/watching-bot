@@ -20,11 +20,12 @@ import { napcatModuleFactory } from "./modules/napcat/index.js";
 import { openDb, Repo } from "./store/db.js";
 import { StateManager } from "./state/manager.js";
 import { Judge } from "./state/judge.js";
+import { UsageRecorder } from "./core/usage.js";
 import { initSnapshot, type StateContext, type StateSnapshot } from "./state/types.js";
 import { transcriptToText } from "./memory/consolidation.js";
 import { installFauxLlm } from "./faux.js";
 
-const SNAPSHOT_FILE = "data/state.json";
+const SNAPSHOT_FILE = process.env.WATCHING_BOT_STATE_FILE ?? "data/state.json";
 
 interface PersistedSnapshot {
   version: 1;
@@ -69,7 +70,9 @@ async function main(): Promise<void> {
   log(`watching-bot 启动,timeScale=${clock.timeScale}${persisted ? "(从快照恢复)" : "(全新,以现实时间为锚)"} | 模拟时间 ${fmtSim(clock.simNow())}`);
 
   const repo = new Repo(openDb(cfg.memory.dataDir));
+  repo.pruneActivityLog(20_000);
   const memory = new MemoryStore(cfg.memory);
+  const usage = new UsageRecorder(repo, clock);
 
   // ---- LLM:faux(测试剧本)或真实模型(pi 网关 + ModelManager 热切换) ----
   const faux = process.env.WATCHING_BOT_FAUX_LLM === "1";
@@ -110,7 +113,7 @@ async function main(): Promise<void> {
   const injector = new Injector(() => cur().model.api, repo, () => clock.simNow());
   const summarize = async (messages: AgentMessage[]) => {
     const { model, streamFn } = cur();
-    const { text } = await generateSummaryWithUsage(
+    const { text, usage: u } = await generateSummaryWithUsage(
       messages,
       model as never,
       8192,
@@ -122,6 +125,11 @@ async function main(): Promise<void> {
       modelManager.thinkingLevel(),
       streamFn,
     );
+    usage.record("compaction", u, {
+      model: (model as { id?: string }).id,
+      provider: (model as { provider?: string }).provider,
+      tsSim: clock.simNow(),
+    });
     return text;
   };
   const initLlm = cur();
@@ -162,6 +170,7 @@ async function main(): Promise<void> {
     repo,
     memory: { indexText: () => memory.indexText() },
     masterQQ,
+    usage,
     log,
   });
   core.runConsolidation = async () => {
@@ -173,6 +182,9 @@ async function main(): Promise<void> {
         streamFn,
         memory,
         weekSize: cfg.memory.consolidateDiaryDaysToWeek,
+        persona,
+        onUsage: (u, message, source) =>
+          usage.record(source ?? "memory", u as never, { ...message, tsSim: clock.simNow() }),
         onSleepCorrection: (moodDelta, stressDelta, reason) => {
           manager.applyJudgeCorrection(moodDelta, stressDelta);
           log(`[memory] 睡眠通道情绪结算 mood${moodDelta >= 0 ? "+" : ""}${moodDelta} stress+${stressDelta}(${reason})`);
@@ -232,6 +244,8 @@ async function main(): Promise<void> {
     getModel: () => cur().model as never,
     getStreamFn: () => cur().streamFn,
     getApiKey: () => curApiKey(),
+    getPersona: () => persona,
+    onUsage: (u, message) => usage.record("judge", u as never, { ...message, tsSim: clock.simNow() }),
     recentTranscript: () => transcriptToText(agent.state.messages, 4000),
     log,
   });
@@ -247,6 +261,16 @@ async function main(): Promise<void> {
       bus,
       repo,
       modelManager,
+      memory: {
+        indexText: () => memory.indexText(),
+        indexPath: () => memory.indexPath(),
+        diaryPath: (date) => memory.diaryPath(date),
+        listDiaryDates: () => memory.listDiaryDates(),
+        readDiary: (date) => memory.readDiary(date),
+      },
+      varDefs: cfg.state.vars,
+      knownModules: bus.factoryNames(),
+      startedAt: Math.round(Date.now() - process.uptime() * 1000),
       coffee: (() => {
         const m = bus.get("builtin");
         return m
