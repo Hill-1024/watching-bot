@@ -20,6 +20,14 @@ export interface ConsolidationDeps {
   weekSize?: number;
   /** 睡眠通道情绪修正:模型在睡前回顾时可对今天做一次心情/压力结算 */
   onSleepCorrection?: (moodDelta: number, stressDelta: number, reason: string) => void;
+  /** 每次模型调用的 token 用量(面板统计) */
+  onUsage?: (
+    usage: unknown,
+    message: { model?: string; provider?: string },
+    source?: "memory" | "weekly",
+  ) => void;
+  /** 人设文本:adjust_mood 情绪结算必须以人设为锚,防 OOC */
+  persona?: string;
   log?(msg: string): void;
 }
 
@@ -119,11 +127,14 @@ export async function runConsolidation(deps: ConsolidationDeps, transcript: Agen
   };
 
   const recentDiaries = memory.recentDiaries(7, today);
+  const personaAnchor = deps.persona
+    ? `\n\n【你的人设(情绪结算时以此为锚,结算必须符合这个角色应有的反应,否则就是 OOC)】\n${deps.persona}`
+    : "";
   const systemPrompt = `你在睡梦中半梦半醒。现在是 ${simTime}(刚躺下)。你的任务是睡前整理记忆:
 1. 用 write_diary 把今天的经历写成日记(基于下面给你的今日对话记录);
 2. 用 update_memory_index 把值得长期记住的事实合并进 MEMORY.md;
-3. 如果今天情绪起伏明显,用 adjust_mood 结算心情(平静的一天可跳过);
-4. 用 finish 结束。做完就睡。`;
+3. 如果今天情绪起伏明显,用 adjust_mood 结算心情(平静的一天可跳过;结算量必须符合你的人设);
+4. 用 finish 结束。做完就睡。${personaAnchor}`;
 
   const agent = new Agent({
     initialState: {
@@ -137,8 +148,17 @@ export async function runConsolidation(deps: ConsolidationDeps, transcript: Agen
   });
   agent.subscribe((event) => {
     if (event.type === "message_end") {
-      const m = event.message as { role?: string; content?: unknown; stopReason?: string; errorMessage?: string };
+      const m = event.message as {
+        role?: string;
+        content?: unknown;
+        stopReason?: string;
+        errorMessage?: string;
+        usage?: unknown;
+        model?: string;
+        provider?: string;
+      };
       if (m.role === "assistant") {
+        deps.onUsage?.(m.usage, { model: m.model, provider: m.provider }, "memory");
         log(`[memory:debug] assistant stop=${m.stopReason} err=${m.errorMessage ?? "-"} content=${JSON.stringify(m.content)?.slice(0, 300)}`);
       }
     } else if (event.type === "tool_execution_end") {
@@ -200,6 +220,16 @@ async function maybeWeeklyMerge(deps: ConsolidationDeps, today: string, simNow: 
     },
     convertToLlm: toLlmMessages,
     streamFn: deps.streamFn,
+  });
+  agent.subscribe((event) => {
+    if (event.type !== "message_end") return;
+    const m = event.message as {
+      role?: string;
+      usage?: unknown;
+      model?: string;
+      provider?: string;
+    };
+    if (m.role === "assistant") deps.onUsage?.(m.usage, { model: m.model, provider: m.provider }, "weekly");
   });
   await agent.prompt({
     role: "user",

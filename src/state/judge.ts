@@ -10,6 +10,10 @@ export interface JudgeDeps {
   getModel(): Model<any>;
   getStreamFn(): StreamFn;
   getApiKey(): string | undefined;
+  /** 人设文本:判读必须以角色人设为锚,防止情绪修正 OOC */
+  getPersona(): string;
+  /** 每次判读调用的 token 用量(面板统计) */
+  onUsage?(usage: unknown, message: { model?: string; provider?: string }): void;
   /** 最近对话文本(监控 agent 本体,与模块无关) */
   recentTranscript(): string;
   log?(msg: string): void;
@@ -66,7 +70,12 @@ export class Judge {
   private async askLlm(transcript: string): Promise<{ moodDelta: number; stressDelta: number; reason: string } | null> {
     const context = {
       systemPrompt:
-        "你是拟人 agent 的情绪判读模块。根据最近的对话/事件片段,判断这段经历对角色情绪的影响。只输出 JSON:{\"moodDelta\": -20..20 整数, \"stressDelta\": 0..20 整数, \"reason\": \"一句话\"}。平淡则输出 {\"moodDelta\":0,\"stressDelta\":0,\"reason\":\"平淡\"}。不要输出其他任何内容。",
+        `${this.deps.getPersona()}\n\n` +
+        `【你的任务】你是上面这个角色的情绪判读模块。根据最近的对话/事件片段,判断这段经历对「这个角色」的情绪影响。\n` +
+        `判读必须以人设为锚:同一件事,不同性格的角色反应完全不同(例如人设里讨厌被吵醒,被吵醒的烦躁与心情下降就该更重;人设慢热,陌生人的示好就不该大幅提升心情)。` +
+        `凡是不符合人设的情绪反应都算 OOC,必须修正到「这个角色应有的反应」。\n\n` +
+        `只输出 JSON:{"moodDelta": -20..20 整数, "stressDelta": 0..20 整数, "reason": "一句话(说明为什么符合人设)"}。` +
+        `平淡或人设反应中性则输出 {"moodDelta":0,"stressDelta":0,"reason":"平淡"}。不要输出其他任何内容。`,
       messages: [
         {
           role: "user",
@@ -80,6 +89,10 @@ export class Judge {
       apiKey: this.deps.getApiKey(),
     });
     const message = await stream.result();
+    this.deps.onUsage?.((message as { usage?: unknown }).usage, {
+      model: (message as { model?: string }).model,
+      provider: (message as { provider?: string }).provider,
+    });
     const text = ((message.content as { type: string; text?: string }[]) ?? [])
       .filter((c) => c.type === "text")
       .map((c) => c.text ?? "")
