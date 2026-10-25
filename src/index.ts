@@ -146,6 +146,11 @@ async function main(): Promise<void> {
   agent.state.thinkingLevel = modelManager.thinkingLevel();
 
   // ---- 核心 + 归并钩子 ----
+  // 主人 QQ:环境变量优先,其次 data/builtin.json(与 builtin 模块同一来源,均 gitignored)
+  const masterQQ = Number(process.env.WATCHING_BOT_MASTER_QQ ?? "") ||
+    (existsSync(resolve("data/builtin.json"))
+      ? ((JSON.parse(readFileSync(resolve("data/builtin.json"), "utf-8")) as { master?: { qq?: number } }).master?.qq ?? 0)
+      : 0);
   const core = new AgentCore({
     cfg,
     clock,
@@ -156,6 +161,7 @@ async function main(): Promise<void> {
     events,
     repo,
     memory: { indexText: () => memory.indexText() },
+    masterQQ,
     log,
   });
   core.runConsolidation = async () => {

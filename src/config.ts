@@ -77,7 +77,10 @@ export interface SleepConfig {
   minFatigueToSleep: number;
   /** 睡眠中私聊消息是否可以叫醒(累积达到阈值触发唤醒决策) */
   wakeOnPrivateMessage: boolean;
+  /** 普通人私聊叫醒所需条数 */
   privateWakeMessages: number;
+  /** 主人私聊叫醒所需条数(豁免额度) */
+  masterPrivateWakeMessages: number;
   privateWakeWindowSimMinutes: number;
 }
 

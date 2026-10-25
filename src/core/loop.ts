@@ -28,6 +28,8 @@ export interface AgentCoreDeps {
   events: Emitter<CoreEvent>;
   repo: Repo;
   memory: MemoryProvider;
+  /** 主人 QQ(0=未配置):私聊叫醒的主人豁免额度用 */
+  masterQQ: number;
   log?: (msg: string) => void;
 }
 
@@ -49,7 +51,7 @@ export class AgentCore implements CoreCommands, MachineHost {
   private kicking = false;
   private emptyBackoffMul = 1;
   private mentionTimes: number[] = [];
-  private privateMsgTimes: number[] = [];
+  private privateMsgTimes: { at: number; master: boolean }[] = [];
   private lastHistorySampleSim = 0;
   private lastTickSim: number | null = null;
   private lastAlarmNote: string | undefined;
@@ -386,13 +388,18 @@ export class AgentCore implements CoreCommands, MachineHost {
       }
     }
     // 睡眠中:群聊不吵醒;私聊累积达到阈值 → 唤醒决策(可赖床,赖床后继续累积会再次触发)
+    // 主人有豁免额度(masterPrivateWakeMessages),普通人走 privateWakeMessages
     if (this.machine.phase === "asleep" && kind === "message" && source?.startsWith("private:")) {
       const cfg = this.deps.cfg.sleep;
       if (!cfg.wakeOnPrivateMessage) return;
-      this.privateMsgTimes.push(this.clock.simNow());
+      const isMaster = this.deps.masterQQ > 0 && source === `private:${this.deps.masterQQ}`;
+      this.privateMsgTimes.push({ at: this.clock.simNow(), master: isMaster });
       const windowMs = cfg.privateWakeWindowSimMinutes * MIN;
-      this.privateMsgTimes = this.privateMsgTimes.filter((t) => this.clock.simNow() - t <= windowMs);
-      if (this.privateMsgTimes.length >= cfg.privateWakeMessages) {
+      const now = this.clock.simNow();
+      this.privateMsgTimes = this.privateMsgTimes.filter((t) => now - t.at <= windowMs);
+      const masterCount = this.privateMsgTimes.filter((t) => t.master).length;
+      const totalCount = this.privateMsgTimes.length;
+      if (masterCount >= cfg.masterPrivateWakeMessages || totalCount >= cfg.privateWakeMessages) {
         this.privateMsgTimes = [];
         // 烦躁累积:被私聊吵醒也算被打扰
         this.events.emit({ type: "perception", kind: "mention", intensity: 2 });

@@ -108,8 +108,9 @@
     "maxSnoozeBeforeForcedWake": 6,
     "minFatigueToSleep": 40,
     "wakeOnPrivateMessage": true,
-    "privateWakeMessages": 2,
-    "privateWakeWindowSimMinutes": 10
+    "privateWakeMessages": 4,
+    "privateWakeWindowSimMinutes": 10,
+    "masterPrivateWakeMessages": 2
   },
   "panel": {
     "enabled": true,
