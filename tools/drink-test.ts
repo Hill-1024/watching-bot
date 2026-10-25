@@ -4,7 +4,7 @@ const m = new BuiltinModule();
 const seen: unknown[] = [];
 await m.init({
   config: { master: { qq: 123, name: "测试主人" }, coffee: { dailyQuota: 2, refillSimHour: 0 } },
-  emitPerception: (e) => seen.push(e),
+  emitPerception: (e: unknown) => seen.push(e),
   simNow: () => Date.now(),
   log: () => {},
 } as never);

@@ -17,6 +17,8 @@ export interface MachineHost {
   runConsolidation(): Promise<void>;
   fatigueNow(): number;
   drowsyOnWakeThreshold(): number;
+  /** 不困门槛:疲惫低于此值时入睡工具拒绝(不困的人睡不着) */
+  minFatigueToSleep(): number;
 }
 
 /**
@@ -68,13 +70,16 @@ export class SleepMachine {
     this.host.events.emit({ type: "phase_changed", phase: this.phase, reason });
   }
 
-  /** 自愿入睡;若正处于被叫醒的犹豫期,等价于赖床(拒绝起床) */
+  /** 自愿入睡;不困时睡不着;正处于被叫醒的犹豫期则等价于赖床 */
   async sleepVoluntarily(): Promise<string> {
     if (this.phase === "waking") {
       this.settleBackToSleep();
       return "你迷迷糊糊地嘟囔了一句,翻了个身继续睡。";
     }
     if (this.phase !== "awake") return "你已经睡着了。";
+    if (this.host.fatigueNow() < this.host.minFatigueToSleep()) {
+      return "你躺下试了试,但一点都不困——脑子清醒得像刚充满电。睡不着,起来吧。";
+    }
     await this.requestSleep("voluntary");
     return "你放下一切,钻进了被窝。意识慢慢沉入黑暗。";
   }
@@ -90,6 +95,8 @@ export class SleepMachine {
       this.host.injectEnv("alarm_ring", { count: this.snoozeCount + 1, note });
     } else if (source === "storm") {
       this.host.injectEnv("storm_sleep");
+    } else if (source === "private_message") {
+      this.host.injectEnv("private_wake");
     } else {
       this.host.injectRawEnv(`有什么东西把你从睡梦中惊扰了(${source})。`);
     }

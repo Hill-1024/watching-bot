@@ -49,6 +49,7 @@ export class AgentCore implements CoreCommands, MachineHost {
   private kicking = false;
   private emptyBackoffMul = 1;
   private mentionTimes: number[] = [];
+  private privateMsgTimes: number[] = [];
   private lastHistorySampleSim = 0;
   private lastTickSim: number | null = null;
   private lastAlarmNote: string | undefined;
@@ -103,6 +104,10 @@ export class AgentCore implements CoreCommands, MachineHost {
 
   drowsyOnWakeThreshold(): number {
     return this.deps.cfg.state.thresholds.drowsyOnWake;
+  }
+
+  minFatigueToSleep(): number {
+    return this.deps.cfg.sleep.minFatigueToSleep;
   }
 
   /** 睡眠转换钩子:交给 memory 模块做睡眠期归并(由 index.ts 注入) */
@@ -186,7 +191,7 @@ export class AgentCore implements CoreCommands, MachineHost {
     });
 
     // 模块感知 → 归一化聚合
-    this.deps.bus.onPerception((e) => this.onPerception(e.kind, e.intensity));
+    this.deps.bus.onPerception((e) => this.onPerception(e.kind, e.intensity, e.source));
 
     // 时钟 tick:闹钟检查 + @风暴窗口聚合 + 硬上限
     this.clock.onTick((sim) => this.onTick(sim));
@@ -367,7 +372,7 @@ export class AgentCore implements CoreCommands, MachineHost {
 
   // ---------- 感知 ----------
 
-  private onPerception(kind: string, intensity: number): void {
+  private onPerception(kind: string, intensity: number, source?: string): void {
     this.events.emit({ type: "perception", kind, intensity });
     if (kind === "mention") {
       this.mentionTimes.push(this.clock.simNow());
@@ -380,7 +385,20 @@ export class AgentCore implements CoreCommands, MachineHost {
         this.scheduleKickAt(this.clock.simNow() + 1 * MIN, "perception");
       }
     }
-    // 睡眠中:单条消息不吵醒;@风暴 → 打断,让模型决定
+    // 睡眠中:群聊不吵醒;私聊累积达到阈值 → 唤醒决策(可赖床,赖床后继续累积会再次触发)
+    if (this.machine.phase === "asleep" && kind === "message" && source?.startsWith("private:")) {
+      const cfg = this.deps.cfg.sleep;
+      if (!cfg.wakeOnPrivateMessage) return;
+      this.privateMsgTimes.push(this.clock.simNow());
+      const windowMs = cfg.privateWakeWindowSimMinutes * MIN;
+      this.privateMsgTimes = this.privateMsgTimes.filter((t) => this.clock.simNow() - t <= windowMs);
+      if (this.privateMsgTimes.length >= cfg.privateWakeMessages) {
+        this.privateMsgTimes = [];
+        // 烦躁累积:被私聊吵醒也算被打扰
+        this.events.emit({ type: "perception", kind: "mention", intensity: 2 });
+        this.requestWakeDecision("private_message");
+      }
+    }
   }
 
   // ---------- 时钟 tick ----------

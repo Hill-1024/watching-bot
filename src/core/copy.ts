@@ -88,7 +88,8 @@ export type EnvKind =
   | "natural_wake"
   | "forced_sleep"
   | "forced_wake_cap"
-  | "storm_sleep";
+  | "storm_sleep"
+  | "private_wake";
 
 export function renderEnv(kind: EnvKind, arg?: { n?: number; count?: number; note?: string }): string {
   switch (kind) {
@@ -110,6 +111,8 @@ export function renderEnv(kind: EnvKind, arg?: { n?: number; count?: number; not
       return "睡了太久,身体自己把你弹醒了,再躺下去骨头都要生锈了。";
     case "storm_sleep":
       return "睡梦中,一阵密集的震动穿透梦境——好像有人不死心地一直在@你。";
+    case "private_wake":
+      return "枕边的手机震个不停,是私聊消息,一直没停。";
   }
 }
 

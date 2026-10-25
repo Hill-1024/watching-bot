@@ -105,7 +105,11 @@
   },
   "sleep": {
     "wakeOnStorm": true,
-    "maxSnoozeBeforeForcedWake": 6
+    "maxSnoozeBeforeForcedWake": 6,
+    "minFatigueToSleep": 40,
+    "wakeOnPrivateMessage": true,
+    "privateWakeMessages": 2,
+    "privateWakeWindowSimMinutes": 10
   },
   "panel": {
     "enabled": true,

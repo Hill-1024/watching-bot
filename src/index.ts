@@ -332,6 +332,7 @@ function lateBoundHost(ref: { current: MachineHost | null }): MachineHost {
     runConsolidation: method("runConsolidation"),
     fatigueNow: method("fatigueNow"),
     drowsyOnWakeThreshold: method("drowsyOnWakeThreshold"),
+    minFatigueToSleep: method("minFatigueToSleep"),
   };
 }
 

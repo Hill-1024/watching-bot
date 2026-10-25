@@ -73,6 +73,12 @@ export interface MemoryConfig {
 export interface SleepConfig {
   wakeOnStorm: boolean;
   maxSnoozeBeforeForcedWake: number;
+  /** 疲惫低于此值时 sleep 工具拒绝入睡(不困的人睡不着) */
+  minFatigueToSleep: number;
+  /** 睡眠中私聊消息是否可以叫醒(累积达到阈值触发唤醒决策) */
+  wakeOnPrivateMessage: boolean;
+  privateWakeMessages: number;
+  privateWakeWindowSimMinutes: number;
 }
 
 export interface PanelConfig {
