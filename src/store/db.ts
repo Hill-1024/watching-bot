@@ -1,10 +1,44 @@
 import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 
 export interface DbHandles {
   db: Database.Database;
   path: string;
+}
+
+/** 一次模型调用的 token 记录(面板 Token 统计页的数据源) */
+export interface TokenUsageRow {
+  tsReal: number;
+  tsSim: number;
+  /** main | compaction | memory | weekly | judge */
+  source: string;
+  provider: string;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  total: number;
+  costTotal: number;
+}
+
+export interface ActivityRow {
+  id: number;
+  tsSim: number;
+  tsReal: number;
+  kind: string;
+  text: string;
+}
+
+export interface InjectionRow {
+  id: number;
+  ts_sim: number;
+  channel: string;
+  kind: string;
+  tier: number | null;
+  text: string;
 }
 
 export function openDb(dataDir: string): DbHandles {
@@ -51,6 +85,32 @@ export function openDb(dataDir: string): DbHandles {
       type TEXT NOT NULL,
       payload TEXT
     );
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_real INTEGER NOT NULL,
+      ts_sim INTEGER NOT NULL,
+      source TEXT NOT NULL,             -- 'main' | 'compaction' | 'memory' | 'weekly' | 'judge'
+      provider TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      input INTEGER NOT NULL DEFAULT 0,
+      output INTEGER NOT NULL DEFAULT 0,
+      cache_read INTEGER NOT NULL DEFAULT 0,
+      cache_write INTEGER NOT NULL DEFAULT 0,
+      reasoning INTEGER NOT NULL DEFAULT 0,
+      total INTEGER NOT NULL DEFAULT 0,
+      cost_total REAL NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(ts_real);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_source ON token_usage(source);
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_sim INTEGER NOT NULL,
+      ts_real INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      text TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_log_ts ON activity_log(ts_real);
+    CREATE INDEX IF NOT EXISTS idx_activity_log_kind ON activity_log(kind);
   `);
   return { db, path };
 }
@@ -63,6 +123,27 @@ export class Repo {
     this.h.db
       .prepare("INSERT INTO state_history(ts_sim, phase, vars) VALUES (?,?,?)")
       .run(tsSim, phase, JSON.stringify(vars));
+  }
+
+  /** 状态历史区间采样:按 id 固定步长抽稀,避免高 timeScale 下一次拉几十万行 */
+  stateHistoryRange(
+    sinceSim: number,
+    untilSim: number,
+    maxPoints: number,
+  ): { ts_sim: number; phase: string; vars: string }[] {
+    const countRow = this.h.db
+      .prepare("SELECT COUNT(*) AS n FROM state_history WHERE ts_sim>=? AND ts_sim<?")
+      .get(sinceSim, untilSim) as { n: number };
+    const total = countRow.n;
+    if (total === 0) return [];
+    const stride = Math.max(1, Math.ceil(total / Math.max(1, maxPoints)));
+    return this.h.db
+      .prepare(
+        `SELECT ts_sim, phase, vars FROM state_history
+         WHERE ts_sim>=? AND ts_sim<? AND (id % ? = 0)
+         ORDER BY ts_sim ASC`,
+      )
+      .all(sinceSim, untilSim, stride) as { ts_sim: number; phase: string; vars: string }[];
   }
 
   insertInjection(tsSim: number, channel: string, kind: string, tier: number | null, text: string): void {
@@ -112,16 +193,199 @@ export class Repo {
     return row.n;
   }
 
-  recentInjections(limit: number): unknown[] {
+  // ---------- 注入流水 ----------
+
+  recentInjections(limit: number): InjectionRow[] {
     return this.h.db
       .prepare("SELECT * FROM injections ORDER BY id DESC LIMIT ?")
-      .all(limit);
+      .all(limit) as InjectionRow[];
+  }
+
+  /** 增量拉取:比 afterId 新的条目(升序),供面板实时追加而不重建列表 */
+  injectionsAfter(afterId: number, limit: number): InjectionRow[] {
+    return this.h.db
+      .prepare("SELECT * FROM injections WHERE id>? ORDER BY id ASC LIMIT ?")
+      .all(afterId, limit) as InjectionRow[];
+  }
+
+  injectionPage(opts: { page: number; pageSize: number; channel?: string }): {
+    items: InjectionRow[];
+    total: number;
+  } {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (opts.channel === "feeling" || opts.channel === "env") {
+      where.push("channel=?");
+      params.push(opts.channel);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const countRow = this.h.db
+      .prepare(`SELECT COUNT(*) AS n FROM injections ${whereSql}`)
+      .get(...params) as { n: number };
+    const offset = (opts.page - 1) * opts.pageSize;
+    const items = this.h.db
+      .prepare(`SELECT * FROM injections ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`)
+      .all(...params, opts.pageSize, offset) as InjectionRow[];
+    return { items, total: countRow.n };
   }
 
   stateHistorySince(tsSim: number, limit: number): unknown[] {
     return this.h.db
       .prepare("SELECT * FROM state_history WHERE ts_sim>=? ORDER BY id ASC LIMIT ?")
       .all(tsSim, limit);
+  }
+
+  // ---------- 活动日志(持久化 + 分页) ----------
+
+  insertActivity(tsSim: number, tsReal: number, kind: string, text: string): void {
+    this.h.db
+      .prepare("INSERT INTO activity_log(ts_sim, ts_real, kind, text) VALUES (?,?,?,?)")
+      .run(tsSim, tsReal, kind, text);
+  }
+
+  activityPage(opts: {
+    page: number;
+    pageSize: number;
+    kinds?: string[];
+    query?: string;
+  }): { items: ActivityRow[]; total: number } {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (opts.kinds && opts.kinds.length > 0) {
+      where.push(`kind IN (${opts.kinds.map(() => "?").join(",")})`);
+      params.push(...opts.kinds);
+    }
+    const q = opts.query?.trim();
+    if (q) {
+      where.push("text LIKE ?");
+      params.push(`%${q}%`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const countRow = this.h.db
+      .prepare(`SELECT COUNT(*) AS n FROM activity_log ${whereSql}`)
+      .get(...params) as { n: number };
+    const offset = (opts.page - 1) * opts.pageSize;
+    const rows = this.h.db
+      .prepare(`SELECT id, ts_sim, ts_real, kind, text FROM activity_log ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`)
+      .all(...params, opts.pageSize, offset) as {
+      id: number;
+      ts_sim: number;
+      ts_real: number;
+      kind: string;
+      text: string;
+    }[];
+    const items = rows.map((r) => ({
+      id: r.id,
+      tsSim: r.ts_sim,
+      tsReal: r.ts_real,
+      kind: r.kind,
+      text: r.text,
+    }));
+    return { items, total: countRow.n };
+  }
+
+  /** 只保留最近 keep 条,避免长期挂机把日志表撑爆 */
+  pruneActivityLog(keep = 20_000): void {
+    this.h.db
+      .prepare(
+        `DELETE FROM activity_log WHERE id <= COALESCE(
+           (SELECT id FROM activity_log ORDER BY id DESC LIMIT 1 OFFSET ?), 0
+         )`,
+      )
+      .run(keep);
+  }
+
+  // ---------- Token 用量 ----------
+
+  insertTokenUsage(row: TokenUsageRow): void {
+    this.h.db
+      .prepare(
+        `INSERT INTO token_usage(
+           ts_real, ts_sim, source, provider, model, input, output,
+           cache_read, cache_write, reasoning, total, cost_total
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        row.tsReal,
+        row.tsSim,
+        row.source,
+        row.provider,
+        row.model,
+        row.input,
+        row.output,
+        row.cacheRead,
+        row.cacheWrite,
+        row.reasoning,
+        row.total,
+        row.costTotal,
+      );
+  }
+
+  tokenUsageBetween(sinceReal: number, untilReal: number): TokenUsageRow[] {
+    const rows = this.h.db
+      .prepare("SELECT * FROM token_usage WHERE ts_real>=? AND ts_real<? ORDER BY ts_real ASC")
+      .all(sinceReal, untilReal) as {
+      ts_real: number;
+      ts_sim: number;
+      source: string;
+      provider: string;
+      model: string;
+      input: number;
+      output: number;
+      cache_read: number;
+      cache_write: number;
+      reasoning: number;
+      total: number;
+      cost_total: number;
+    }[];
+    return rows.map((r) => ({
+      tsReal: r.ts_real,
+      tsSim: r.ts_sim,
+      source: r.source,
+      provider: r.provider,
+      model: r.model,
+      input: r.input,
+      output: r.output,
+      cacheRead: r.cache_read,
+      cacheWrite: r.cache_write,
+      reasoning: r.reasoning,
+      total: r.total,
+      costTotal: r.cost_total,
+    }));
+  }
+
+  /** 最近请求明细(倒序),统计页表格用 */
+  recentTokenUsage(sinceReal: number, untilReal: number, limit: number): TokenUsageRow[] {
+    const rows = this.h.db
+      .prepare("SELECT * FROM token_usage WHERE ts_real>=? AND ts_real<? ORDER BY ts_real DESC LIMIT ?")
+      .all(sinceReal, untilReal, limit) as {
+      ts_real: number;
+      ts_sim: number;
+      source: string;
+      provider: string;
+      model: string;
+      input: number;
+      output: number;
+      cache_read: number;
+      cache_write: number;
+      reasoning: number;
+      total: number;
+      cost_total: number;
+    }[];
+    return rows.map((r) => ({
+      tsReal: r.ts_real,
+      tsSim: r.ts_sim,
+      source: r.source,
+      provider: r.provider,
+      model: r.model,
+      input: r.input,
+      output: r.output,
+      cacheRead: r.cache_read,
+      cacheWrite: r.cache_write,
+      reasoning: r.reasoning,
+      total: r.total,
+      costTotal: r.cost_total,
+    }));
   }
 
   close(): void {

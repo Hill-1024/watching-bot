@@ -12,6 +12,7 @@ import type { Injector } from "./inject.js";
 import type { Emitter, CoreCommands, CoreEvent } from "./events.js";
 import type { MachineHost, SleepMachine } from "./machine.js";
 import type { StateContext } from "../state/types.js";
+import type { UsageRecorder } from "./usage.js";
 
 export interface MemoryProvider {
   /** MEMORY.md 当前内容(进系统提示 memory section) */
@@ -30,6 +31,8 @@ export interface AgentCoreDeps {
   memory: MemoryProvider;
   /** 主人 QQ(0=未配置):私聊叫醒的主人豁免额度用 */
   masterQQ: number;
+  /** token 用量统一落库(主 agent 的每次 assistant 回复) */
+  usage?: UsageRecorder;
   log?: (msg: string) => void;
 }
 
@@ -121,22 +124,44 @@ export class AgentCore implements CoreCommands, MachineHost {
   // ---------- 活动日志(思维链/输出/工具调用,内存环形缓冲,面板消费) ----------
 
   private activitySeq = 0;
+  private activityInserts = 0;
   private readonly activityBuf: ActivityEntry[] = [];
-  private static readonly ACTIVITY_CAP = 400;
+  private static readonly ACTIVITY_CAP = 600;
   private static readonly ACTIVITY_TEXT_CAP = 4000;
 
   private pushActivity(kind: ActivityEntry["kind"], text: string): void {
     const trimmed = text.slice(0, AgentCore.ACTIVITY_TEXT_CAP);
-    this.activityBuf.push({ seq: ++this.activitySeq, tsSim: this.clock.simNow(), kind, text: trimmed });
+    const tsSim = this.clock.simNow();
+    const tsReal = Date.now();
+    this.activityBuf.push({ seq: ++this.activitySeq, tsSim, tsReal, kind, text: trimmed });
     if (this.activityBuf.length > AgentCore.ACTIVITY_CAP) this.activityBuf.shift();
+    this.deps.repo.insertActivity(tsSim, tsReal, kind, trimmed);
+    if (++this.activityInserts % 500 === 0) this.deps.repo.pruneActivityLog(20_000);
   }
 
-  /** 面板拉取:after 之后的活动条目 */
-  activitySince(after: number): { entries: ActivityEntry[]; lastSeq: number } {
+  /**
+   * 面板增量拉取:after 之后的条目。
+   * reset=true 表示客户端游标已经失效(服务重启 seq 归零,或环形缓冲已覆盖),应清空重来。
+   */
+  activitySince(after: number): {
+    entries: ActivityEntry[];
+    firstSeq: number;
+    lastSeq: number;
+    reset: boolean;
+  } {
+    const firstSeq = this.activityBuf[0]?.seq ?? this.activitySeq + 1;
+    const lastSeq = this.activitySeq;
+    const reset = after > 0 && (after > lastSeq || after < firstSeq - 1);
     return {
       entries: this.activityBuf.filter((e) => e.seq > after),
-      lastSeq: this.activitySeq,
+      firstSeq,
+      lastSeq,
+      reset,
     };
+  }
+
+  activityLastSeq(): number {
+    return this.activitySeq;
   }
 
   // ---------- 生命周期 ----------
@@ -169,6 +194,12 @@ export class AgentCore implements CoreCommands, MachineHost {
             }
           }
           if (m.errorMessage) this.pushActivity("error", String(m.errorMessage));
+          const um = m as { usage?: unknown; model?: string; provider?: string };
+          this.deps.usage?.record("main", um.usage as never, {
+            model: um.model,
+            provider: um.provider,
+            tsSim: this.clock.simNow(),
+          });
           const tools = (m.content as { type: string; name?: string }[]).filter((c) => c.type === "toolCall").map((c) => c.name ?? "");
           const text = this.assistantTextLen(m) > 0 ? this.assistantText(m) : "";
           this.log(
