@@ -41,7 +41,8 @@ export function createAgent(opts: {
   /** 恢复的 transcript(不含 leading system 消息) */
   restoredMessages?: import("@earendil-works/pi-agent-core").AgentMessage[];
   loopCfg: LoopConfig;
-  contextWindow: number;
+  /** 当前模型上下文窗口;传 getter 可在模型热切换后立即生效 */
+  contextWindow: number | (() => number);
   summarize: (messages: import("@earendil-works/pi-agent-core").AgentMessage[]) => Promise<string>;
   log?: (msg: string) => void;
 }): AgentAssembly {
@@ -64,7 +65,10 @@ export function createAgent(opts: {
     streamFn: opts.streamFn,
     transformContext: async (messages) => {
       const tokens = messages.reduce((n, m) => n + estimateTokens(m), 0);
-      if (!shouldCompact(tokens, opts.contextWindow, DEFAULT_COMPACTION_SETTINGS)) {
+      const contextWindow = typeof opts.contextWindow === "function"
+        ? opts.contextWindow()
+        : opts.contextWindow;
+      if (!shouldCompact(tokens, contextWindow, DEFAULT_COMPACTION_SETTINGS)) {
         return messages;
       }
       // 找切点:从尾往前保留 ~keepRecentTokens,切在消息边界(非 system)

@@ -90,7 +90,7 @@ export class NapcatModule implements BotModule {
   async init(ctx: ModuleCtx): Promise<void> {
     this.ctx = ctx;
     const cfg = (ctx.config ?? {}) as NapcatModuleConfig;
-    const url = cfg.url ?? process.env.NAPCAT_URL ?? "ws://127.0.0.1:3001";
+    const url = cfg.url ?? "ws://127.0.0.1:3001";
     this.selfId = cfg.selfId ?? 0;
     this.memeDir = cfg.memeDir ?? "data/modules/memes";
     this.store = new NapcatStore(cfg.dbPath ?? "data/modules/napcat.db");
@@ -100,7 +100,9 @@ export class NapcatModule implements BotModule {
     this.client = new OneBotClient(url, cfg.token ?? "", {
       onEvent: (e) => this.onEvent(e),
       onOpen: () => {
-        void this.onReady();
+        void this.onReady().catch((err) => {
+          this.ctx?.log(`onReady 异常: ${String(err)}`);
+        });
       },
       log: ctx.log,
     });
@@ -109,20 +111,22 @@ export class NapcatModule implements BotModule {
   }
 
   private async onReady(): Promise<void> {
-    if (!this.ctx) return;
+    const ctx = this.ctx;
+    if (!ctx) return;
     try {
       if (this.selfId === 0) {
         const info = (await this.client!.call("get_login_info")) as { user_id: number; nickname: string };
         this.selfId = info.user_id;
-        this.ctx.log(`登录身份: ${info.nickname}(${info.user_id})`);
+        ctx.log(`登录身份: ${info.nickname}(${info.user_id})`);
       }
       const friends = (await this.client!.call("get_friend_list")) as unknown as ObFriend[];
       this.store?.cacheFriends(friends ?? []);
       const groups = (await this.client!.call("get_group_list")) as unknown as ObGroup[];
       this.store?.cacheGroups(groups ?? []);
-      this.ctx.log(`通讯录就绪: ${friends?.length ?? 0} 好友, ${groups?.length ?? 0} 群`);
+      if (this.ctx) ctx.log(`通讯录就绪: ${friends?.length ?? 0} 好友, ${groups?.length ?? 0} 群`);
     } catch (err) {
-      this.ctx.log(`初始化失败(稍后重连会再试): ${String(err)}`);
+      // 模块可能在校验中途被面板热切换停掉,此时 this.ctx 已置空;用捕获的 ctx 且不再强解引用
+      if (this.ctx) ctx.log(`初始化失败(稍后重连会再试): ${String(err)}`);
     }
   }
 
@@ -147,7 +151,7 @@ export class NapcatModule implements BotModule {
 
   private buildTools(): void {
     const store = () => {
-      if (!this.store) throw new Error("napcat 模块未就绪");
+      if (!this.store) throw new Error("QQ 模块未就绪");
       return this.store;
     };
     const client = () => {

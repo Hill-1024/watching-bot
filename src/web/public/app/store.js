@@ -210,7 +210,7 @@ export function stopPolling() {
 }
 
 export async function bootstrap() {
-  if (!store.auth.checked) store.auth.checked = true;
+  // 保持 checked=false 直到 fetchStatus 真正判定完,避免刷新时先闪一下登录页。
   const ok = await fetchStatus();
   if (ok) startPolling();
   return ok;

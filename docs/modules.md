@@ -56,6 +56,10 @@ bus.registerFactory("websearch", () => new MyModule());
 4. **自带持久化**:模块数据存自己的库(参考 napcat 的 `data/modules/napcat.db`),核心不读模块库,模块不读核心库。
 5. **语义标签**:若某工具代表「社交行为」,给它打 `social` 标签 —— 状态管理器会消耗社交电量/提升心情。它不认识你的工具名,只认识标签。
 
+## SnowLuma 模块
+
+`src/modules/snowluma/` 是第二套 QQ 接入运行时。SnowLuma 提供 OneBot 11(含 `set_msg_emoji_like` 等扩展),因此它直接复用 `NapcatModule` 的 18 个工具实现,只替换模块身份与能力摘要,保证工具集完全对齐。面板「QQ 接入」选择器在 NapCat / SnowLuma 之间互斥切换,默认 NapCat;选择写入 `data/qq-backend.json`。两套模块共用消息库与表情包目录,切换后历史延续。
+
 ## napcat 模块的 18 个工具(参考实现)
 
 消息与通讯录:

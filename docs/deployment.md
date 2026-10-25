@@ -45,7 +45,7 @@ WATCHING_BOT_API_KEY=你的key WATCHING_BOT_PANEL_TOKEN=面板密码 npm start
 
 ```bash
 docker pull ghcr.io/hill-1024/watching-bot:latest
-# 或锁定版本:ghcr.io/hill-1024/watching-bot:0.1.0
+# 或锁定版本:ghcr.io/hill-1024/watching-bot:0.1.1
 ```
 
 仓库自带的 `docker-compose.yml` 已指向该镜像,`docker compose up -d` 直接拉取;想从源码构建则用 `docker compose up -d --build`。

@@ -47,12 +47,26 @@ const PAGES = {
   system: SystemPage,
 };
 
+const GROUP_DEFAULT = Object.fromEntries(NAV.map((g) => [g.group, g.items[0]?.route || "overview"]));
+const COLLAPSE_KEY = "wb_sidebar_collapsed";
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export const AppShell = {
   name: "AppShell",
   components: { OverviewPage, StatePage, ActivityPage, InjectionsPage, UsagePage, MemoryPage, ModelPage, SystemPage },
   setup() {
     const route = ref(routeFromHash());
     const sidebarOpen = ref(false);
+    const collapsed = ref(readCollapsed());
+    const mql = window.matchMedia("(max-width: 1024px)");
+    const isMobile = ref(mql.matches);
     const now = ref(Date.now());
     const tokenInput = ref("");
     const loginError = ref("");
@@ -66,6 +80,18 @@ export const AppShell = {
       }
       return NAV[0].items[0];
     });
+    const sidebarCollapsed = computed(() => collapsed.value && !isMobile.value);
+    const groupDefault = computed(() => GROUP_DEFAULT[currentMeta.value.group] || "overview");
+    const toggleIcon = computed(() => (isMobile.value ? "menu" : "panelLeft"));
+    const sidebarToggleLabel = computed(() =>
+      isMobile.value
+        ? sidebarOpen.value
+          ? "关闭导航"
+          : "打开导航"
+        : collapsed.value
+          ? "展开侧边栏"
+          : "收起侧边栏",
+    );
     const fresh = computed(() => Boolean(store.statusAt) && now.value - store.statusAt < 8000);
     const freshLabel = computed(() => {
       if (store.statusError) return "连接中断";
@@ -76,6 +102,26 @@ export const AppShell = {
     const simClock = computed(() => store.status?.sim || "-");
     const realClock = computed(() => fmtFullDate(now.value));
 
+    function toggleSidebar() {
+      if (isMobile.value) sidebarOpen.value = !sidebarOpen.value;
+      else collapsed.value = !collapsed.value;
+    }
+    function clearSidebarSelection() {
+      try {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const sidebar = document.querySelector(".sidebar");
+        if (!sidebar) return;
+        const inside = (node) => Boolean(node && sidebar.contains(node));
+        if (inside(sel.anchorNode) || inside(sel.focusNode)) sel.removeAllRanges();
+      } catch {
+        // 选区 API 不可用时忽略
+      }
+    }
+    function onMediaChange(e) {
+      isMobile.value = e.matches;
+      if (!e.matches) sidebarOpen.value = false;
+    }
     function onHash() {
       route.value = routeFromHash();
       sidebarOpen.value = false;
@@ -115,17 +161,29 @@ export const AppShell = {
       applyTheme();
       window.addEventListener("hashchange", onHash);
       window.addEventListener("keydown", onKeydown);
+      mql.addEventListener("change", onMediaChange);
       ticker = setInterval(() => (now.value = Date.now()), 1000);
       void bootstrap();
     });
     onBeforeUnmount(() => {
       window.removeEventListener("hashchange", onHash);
       window.removeEventListener("keydown", onKeydown);
+      mql.removeEventListener("change", onMediaChange);
       clearInterval(ticker);
     });
     watch(route, () => {
-      // 路由切换由 hashchange 负责,这里只用于确保移动端抽屉收起
       sidebarOpen.value = false;
+    });
+    watch(collapsed, (v) => {
+      clearSidebarSelection();
+      try {
+        localStorage.setItem(COLLAPSE_KEY, v ? "1" : "0");
+      } catch {
+        // 隐私模式下忽略持久化失败
+      }
+    });
+    watch(sidebarOpen, (v) => {
+      if (!v) clearSidebarSelection();
     });
 
     return {
@@ -133,16 +191,23 @@ export const AppShell = {
       NAV,
       route,
       sidebarOpen,
+      collapsed,
+      sidebarCollapsed,
+      isMobile,
       now,
       tokenInput,
       loginError,
       loggingIn,
       currentPage,
       currentMeta,
+      groupDefault,
+      toggleIcon,
+      sidebarToggleLabel,
       fresh,
       freshLabel,
       simClock,
       realClock,
+      toggleSidebar,
       submitLogin,
       retry,
       doLogout,
@@ -189,9 +254,9 @@ export const AppShell = {
     <ToastHost />
   </div>
 
-  <div v-else class="shell" :class="{ 'sidebar-open': sidebarOpen }">
+  <div v-else class="shell" :class="{ 'sidebar-open': sidebarOpen, 'sidebar-collapsed': sidebarCollapsed }">
     <button class="sidebar-backdrop" aria-label="关闭导航" @click="sidebarOpen = false"></button>
-    <aside class="sidebar">
+    <aside class="sidebar" :class="{ 'is-collapsed': sidebarCollapsed }">
       <div class="brand">
         <span class="brand-mark">w</span>
         <div class="brand-text"><b>watching-bot</b><span>管理面板</span></div>
@@ -200,25 +265,40 @@ export const AppShell = {
 
       <nav class="nav" aria-label="主导航">
         <div v-for="g in NAV" :key="g.group" class="nav-group">
-          <div class="nav-group-label">{{ g.group }}</div>
+          <div class="nav-group-label" aria-hidden="true">
+            <span class="nav-group-label-h">{{ g.group }}</span>
+            <span class="nav-group-label-v">
+              <span class="nav-group-label-v-inner">
+                <span v-for="(ch, ci) in Array.from(g.group)" :key="ci">{{ ch }}</span>
+              </span>
+            </span>
+          </div>
           <a v-for="item in g.items" :key="item.route" class="nav-item" :class="{ 'is-active': route === item.route }"
-            :href="'#/' + item.route" :aria-current="route === item.route ? 'page' : undefined">
+            :href="'#/' + item.route" :aria-current="route === item.route ? 'page' : undefined"
+            :title="sidebarCollapsed ? item.label : undefined" :aria-label="item.label">
             <Icon :name="item.icon" :size="17" />
-            <span>{{ item.label }}</span>
+            <span class="nav-label-clip"><span class="nav-label">{{ item.label }}</span></span>
           </a>
         </div>
       </nav>
 
       <div class="sidebar-foot">
-        <div class="sidebar-status">
+        <div class="status-track">
           <StatusPill v-if="store.status" :phase="store.status.phase" />
           <LiveDot :live="fresh" :label="freshLabel" />
         </div>
-        <div class="sidebar-clock">
-          <span class="clock-label">模拟</span><span class="clock-value">{{ simClock }}</span>
-        </div>
-        <div class="sidebar-clock">
-          <span class="clock-label">真实</span><span class="clock-value">{{ realClock }}</span>
+        <div class="foot-meta">
+          <div class="foot-times">
+            <div class="sidebar-clock">
+              <span class="clock-label">模拟</span><span class="clock-value">{{ simClock }}</span>
+            </div>
+            <div class="sidebar-clock">
+              <span class="clock-label">真实</span><span class="clock-value">{{ realClock }}</span>
+            </div>
+          </div>
+          <div class="foot-scale" :title="'模拟时间倍率 ×' + (store.status?.timeScale ?? '-')">
+            ×{{ store.status?.timeScale ?? "-" }}
+          </div>
         </div>
       </div>
     </aside>
@@ -226,9 +306,11 @@ export const AppShell = {
     <div class="main">
       <header class="topbar">
         <div class="topbar-left">
-          <button class="btn-icon btn-ghost topbar-menu" aria-label="打开导航" @click="sidebarOpen = true"><Icon name="menu" :size="18" /></button>
+          <button class="btn-icon btn-ghost topbar-menu" :aria-label="sidebarToggleLabel" :title="sidebarToggleLabel" @click="toggleSidebar">
+            <Icon :name="toggleIcon" :size="18" />
+          </button>
           <nav class="breadcrumb" aria-label="位置">
-            <span>{{ currentMeta.group }}</span>
+            <a class="breadcrumb-link" :href="'#/' + groupDefault" :title="'前往' + currentMeta.group + '默认页'">{{ currentMeta.group }}</a>
             <Icon name="chevronRight" :size="12" />
             <b>{{ currentMeta.label }}</b>
           </nav>

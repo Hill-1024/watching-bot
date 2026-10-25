@@ -104,7 +104,13 @@ API key 按优先级:`apiKeyEnv` 指定的环境变量 → pi 标准环境变量
 
 ## modules / moduleConfig
 
-`modules` 数组控制启用哪些模块(`["mock","napcat"]`),`moduleConfig.<name>` 是各模块独立配置段。napcat 段:`url`(WS 地址,可被环境变量 `NAPCAT_URL` 覆盖,compose 里是 `ws://napcat:3001`)、`token`、`selfId`(0=自取)、`dbPath`、`memeDir`、`sendMinIntervalMs`/`sendJitterMs`(发送节流)。
+`modules` 数组控制启用哪些模块,`moduleConfig.<name>` 是各模块独立配置段。napcat 段:`url`(WS 地址,可被环境变量 `NAPCAT_URL` 覆盖,compose 里是 `ws://napcat:3001`)、`token`、`selfId`(0=自取)、`dbPath`、`memeDir`、`sendMinIntervalMs`/`sendJitterMs`(发送节流)。
+
+### QQ 接入:NapCat / SnowLuma 二选一
+
+`napcat` 与 `snowluma` 是互斥的 QQ 接入运行时,不会同时启动;选择保存在 `data/qq-backend.json`(gitignored),缺失或损坏时默认 **NapCat**。面板「模块与系统 → QQ 接入」可热切换并持久化,`modules` 数组里的这两个名字会被选择结果替代,其他模块仍由数组控制。
+
+两套运行时都走 OneBot 11,SnowLuma 模块复用 NapCat 的同一套 18 个工具,并默认共用 `data/modules/napcat.db` 与 `data/modules/memes`(切换后消息、未读、表情包延续)。`moduleConfig.snowluma` 与 napcat 同构,默认 WS 也是 `ws://127.0.0.1:3001`;若两个运行时同时开着,需要给 SnowLuma 配一个不同的 `url` 并在它自己的 WebUI 里监听对应端口。切换只停/启 agent 侧模块,不负责启动或停止 QQ 进程。
 
 ## panel
 
@@ -122,4 +128,5 @@ API key 按优先级:`apiKeyEnv` 指定的环境变量 → pi 标准环境变量
 | `WATCHING_BOT_STATE_FILE` | 快照文件路径(默认 `data/state.json`;隔离测试实例用) |
 | `WATCHING_BOT_PANEL_TOKEN` | 面板 token |
 | `NAPCAT_URL` / `NAPCAT_TOKEN` | 覆盖 napcat 模块连接参数 |
+| `SNOWLUMA_URL` / `SNOWLUMA_TOKEN` | 覆盖 snowluma 模块连接参数 |
 | `QQ_ACCOUNT` | compose 里 NapCat 的 QQ 号 |

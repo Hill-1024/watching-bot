@@ -121,6 +121,11 @@ export class AgentCore implements CoreCommands, MachineHost {
   /** 模块热插拔后刷新 agent 工具集与 capabilities section(由 index.ts 注入) */
   refreshAgentTools: () => void = () => {};
 
+  /** 面板热更新主人 QQ(睡眠叫醒的主人豁免额度用) */
+  setMasterQQ(qq: number): void {
+    this.deps.masterQQ = Math.max(0, Math.min(9_999_999_999_999, Math.round(qq)));
+  }
+
   // ---------- 活动日志(思维链/输出/工具调用,内存环形缓冲,面板消费) ----------
 
   private activitySeq = 0;

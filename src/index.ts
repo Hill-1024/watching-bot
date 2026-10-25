@@ -17,6 +17,9 @@ import { MemoryStore } from "./memory/files.js";
 import { runConsolidation } from "./memory/consolidation.js";
 import { builtinModuleFactory, type BuiltinModule } from "./modules/builtin/index.js";
 import { napcatModuleFactory } from "./modules/napcat/index.js";
+import { readNapcatWebuiInfo, writeNapcatWebuiPort } from "./modules/napcat/webui-config.js";
+import { snowlumaModuleFactory } from "./modules/snowluma/index.js";
+import { loadQqBackend, saveQqBackend, type QqBackend } from "./qq-backend.js";
 import { openDb, Repo } from "./store/db.js";
 import { StateManager } from "./state/manager.js";
 import { Judge } from "./state/judge.js";
@@ -87,11 +90,49 @@ async function main(): Promise<void> {
   const curApiKey = (): string | undefined => (fauxLlm ? undefined : modelManager.apiKey());
 
   // ---- 模块总线 ----
-  const bus = new ModuleHost({ clock, log, moduleConfigs: cfg.moduleConfig });
+  // NapCat token:配置优先,NAPCAT_TOKEN 兜底。把生效值写回总线下发的配置副本,
+  // 保证面板展示的 token 与实际建连使用的一致(原配置对象不改)。
+  const moduleConfigs = structuredClone(cfg.moduleConfig) as Record<string, unknown>;
+  const napcatCfg = (
+    moduleConfigs.napcat && typeof moduleConfigs.napcat === "object" ? moduleConfigs.napcat : {}
+  ) as Record<string, unknown>;
+  const configToken = typeof napcatCfg.token === "string" ? napcatCfg.token.trim() : "";
+  const envToken = (process.env.NAPCAT_TOKEN ?? "").trim();
+  const napcatToken = configToken || envToken;
+  const napcatTokenSource = configToken ? "config" : envToken ? "env" : "none";
+  if (napcatToken) napcatCfg.token = napcatToken;
+  else delete napcatCfg.token;
+  const envNapcatUrl = (process.env.NAPCAT_URL ?? "").trim();
+  if (envNapcatUrl) napcatCfg.url = envNapcatUrl;
+  moduleConfigs.napcat = napcatCfg;
+
+  // SnowLuma 使用独立 URL/token 覆盖,避免共享 NapCat 的 docker 环境变量
+  const snowlumaCfg = (
+    moduleConfigs.snowluma && typeof moduleConfigs.snowluma === "object" ? moduleConfigs.snowluma : {}
+  ) as Record<string, unknown>;
+  const envSnowlumaUrl = (process.env.SNOWLUMA_URL ?? "").trim();
+  if (envSnowlumaUrl) snowlumaCfg.url = envSnowlumaUrl;
+  const snowlumaConfigToken = typeof snowlumaCfg.token === "string" ? snowlumaCfg.token.trim() : "";
+  const envSnowlumaToken = (process.env.SNOWLUMA_TOKEN ?? "").trim();
+  const snowlumaToken = snowlumaConfigToken || envSnowlumaToken;
+  if (snowlumaToken) snowlumaCfg.token = snowlumaToken;
+  else delete snowlumaCfg.token;
+  moduleConfigs.snowluma = snowlumaCfg;
+
+  // QQ 接入只允许一套运行:选择文件缺失时默认 NapCat;面板切换会写回 data/qq-backend.json
+  let qqBackend = loadQqBackend();
+
+  const bus = new ModuleHost({ clock, log, moduleConfigs });
   bus.registerFactory("napcat", napcatModuleFactory);
+  bus.registerFactory("snowluma", snowlumaModuleFactory);
   bus.registerFactory("builtin", builtinModuleFactory);
-  // 新模块工厂在这里注册;config.modules 控制启停
-  await bus.startAll(cfg.modules);
+  // 新模块工厂在这里注册;config.modules 控制其他模块启停,QQ 后端由选择文件决定
+  const moduleNames = [
+    ...cfg.modules.filter((n) => n !== "napcat" && n !== "snowluma"),
+    qqBackend,
+  ];
+  await bus.startAll(moduleNames);
+  log(`QQ 接入: ${qqBackend}(默认 NapCat,可在面板切换)`);
 
   // ---- 睡醒状态机(late-bound host:core 建好后回填) ----
   const hostRef: { current: MachineHost | null } = { current: null };
@@ -147,7 +188,8 @@ async function main(): Promise<void> {
       (m) => (m as { role?: string }).role !== "system",
     ),
     loopCfg: cfg.loop,
-    contextWindow: cfg.model.contextWindow,
+    // 跟随模型的实际窗口,而不是 config 里的基础值;否则切到 1M 模型仍按 128k 反复压缩
+    contextWindow: () => modelManager.view().contextWindow,
     summarize,
     log,
   });
@@ -271,15 +313,70 @@ async function main(): Promise<void> {
       varDefs: cfg.state.vars,
       knownModules: bus.factoryNames(),
       startedAt: Math.round(Date.now() - process.uptime() * 1000),
-      coffee: (() => {
-        const m = bus.get("builtin");
+      // 动态解析:模块停止后面板立即显示不可用,而不是持有启动时的旧引用
+      coffee: () => {
+        const m = bus.get("builtin") as BuiltinModule | undefined;
         return m
           ? {
-              remaining: () => (m as BuiltinModule).coffeeRemaining(),
-              grant: (n: number) => (m as BuiltinModule).grantCoffee(n),
+              remaining: () => m.coffeeRemaining(),
+              grant: (n: number) => m.grantCoffee(n),
             }
           : null;
-      })(),
+      },
+      builtinConfig: () => {
+        const m = bus.get("builtin") as BuiltinModule | undefined;
+        return m
+          ? {
+              view: () => m.configView(),
+              update: (patch) => m.updateConfig(patch),
+            }
+          : null;
+      },
+      // 每次请求都重读 WebUI 配置, NapCat 轮换 token/改端口后刷新面板即可看到
+      napcatToken: () => {
+        const webui = readNapcatWebuiInfo();
+        return {
+          token: webui.token,
+          source: webui.source,
+          port: webui.port,
+          exists: webui.exists,
+          onebot: { token: napcatToken, source: napcatTokenSource },
+        };
+      },
+      setNapcatWebuiPort: (port: number) => {
+        const info = writeNapcatWebuiPort(port);
+        log(`[panel] NapCat WebUI 端口已保存为 ${info.port},等待 NapCat 重启`);
+        return info.port;
+      },
+      qqBackend: () => qqBackend,
+      setQqBackend: async (name: QqBackend) => {
+        if (name === qqBackend) return { ok: true };
+        const previous = qqBackend;
+        await bus.stopOne(previous);
+        let started = false;
+        try {
+          started = await bus.startOne(name);
+        } catch (err) {
+          log(`[panel] 启动 QQ 接入 ${name} 失败: ${String(err)}`);
+        }
+        if (!started) {
+          try {
+            await bus.startOne(previous);
+          } catch (err) {
+            log(`[panel] 恢复 QQ 接入 ${previous} 失败: ${String(err)}`);
+          }
+          return { ok: false, error: `无法启动 ${name},已尝试恢复 ${previous}` };
+        }
+        qqBackend = name;
+        try {
+          saveQqBackend(name);
+        } catch (err) {
+          log(`[panel] 保存 QQ 接入选择失败(运行时已切换): ${String(err)}`);
+        }
+        core.refreshAgentTools();
+        log(`[panel] QQ 接入已切换: ${previous} → ${name}`);
+        return { ok: true };
+      },
       onModelChanged: () => {
         const h = modelManager.current;
         agent.state.model = h.model as never;

@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { BotModule, ModuleCtx, PerceptionEvent } from "../../bus/types.js";
@@ -42,6 +42,7 @@ export class BuiltinModule implements BotModule {
   };
   private remaining = 0;
   private lastRefillDay = -1;
+  private overridePath = "data/builtin.json";
 
   async init(ctx: ModuleCtx): Promise<void> {
     this.ctx = ctx;
@@ -49,9 +50,10 @@ export class BuiltinModule implements BotModule {
     if (c.master) Object.assign(this.cfg.master, c.master);
     if (c.coffee) Object.assign(this.cfg.coffee, c.coffee);
     // 敏感覆盖层(gitignored):data/builtin.json 的 master/coffee 字段优先
-    const overridePath = resolve(
-      typeof c.overrideFile === "string" && c.overrideFile ? c.overrideFile : "data/builtin.json",
-    );
+    this.overridePath = typeof c.overrideFile === "string" && c.overrideFile
+      ? c.overrideFile
+      : "data/builtin.json";
+    const overridePath = resolve(this.overridePath);
     if (existsSync(overridePath)) {
       try {
         const o = JSON.parse(readFileSync(overridePath, "utf-8")) as Partial<BuiltinModuleConfig>;
@@ -104,6 +106,51 @@ export class BuiltinModule implements BotModule {
   coffeeRemaining(): number {
     this.maybeRefill();
     return this.remaining;
+  }
+
+  /** 面板读取当前生效配置(含 data/builtin.json 与环境变量覆盖) */
+  configView(): { master: { name: string; qq: number }; coffee: { dailyQuota: number; refillSimHour: number } } {
+    return {
+      master: { ...this.cfg.master },
+      coffee: { ...this.cfg.coffee },
+    };
+  }
+
+  /**
+   * 面板修改配置:先原子写入 data/builtin.json,成功后再热应用并重建工具。
+   * 写入失败时内存配置保持不变,避免面板显示与实际落盘不一致。
+   */
+  updateConfig(patch: {
+    master?: { name?: string; qq?: number };
+    coffee?: { dailyQuota?: number };
+  }): void {
+    const next: BuiltinModuleConfig = {
+      ...this.cfg,
+      master: { ...this.cfg.master },
+      coffee: { ...this.cfg.coffee },
+    };
+    if (patch.master) {
+      if (typeof patch.master.name === "string" && patch.master.name.trim()) {
+        next.master.name = patch.master.name.trim().slice(0, 40);
+      }
+      if (typeof patch.master.qq === "number" && Number.isFinite(patch.master.qq)) {
+        next.master.qq = Math.max(0, Math.min(9_999_999_999_999, Math.round(patch.master.qq)));
+      }
+    }
+    if (patch.coffee && typeof patch.coffee.dailyQuota === "number" && Number.isFinite(patch.coffee.dailyQuota)) {
+      next.coffee.dailyQuota = Math.max(0, Math.min(50, Math.round(patch.coffee.dailyQuota)));
+    }
+    this.persistConfig(next);
+    this.cfg = next;
+    this.buildTools();
+  }
+
+  private persistConfig(cfg: BuiltinModuleConfig): void {
+    const path = resolve(this.overridePath);
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ master: cfg.master, coffee: cfg.coffee }, null, 2), "utf-8");
+    renameSync(tmp, path);
   }
 
   private buildTools(): void {

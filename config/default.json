@@ -25,10 +25,19 @@
       "sendMinIntervalMs": 2500,
       "sendJitterMs": 1500
     },
+    "snowluma": {
+      "url": "ws://127.0.0.1:3001",
+      "token": "",
+      "selfId": 0,
+      "dbPath": "data/modules/napcat.db",
+      "memeDir": "data/modules/memes",
+      "sendMinIntervalMs": 2500,
+      "sendJitterMs": 1500
+    },
     "builtin": {
       "master": {
         "qq": 0,
-        "name": "Hill"
+        "name": "主人"
       },
       "coffee": {
         "dailyQuota": 3,

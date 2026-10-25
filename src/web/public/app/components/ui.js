@@ -37,7 +37,7 @@ export const StatusPill = {
       return PHASE_LABEL[this.phase] || this.phase;
     },
   },
-  template: `<span class="status-pill" :data-phase="phase"><span class="status-dot"></span>{{ label }}</span>`,
+  template: `<span class="status-pill" :data-phase="phase"><span class="status-dot"></span><span class="status-label">{{ label }}</span></span>`,
 };
 
 export const LiveDot = {
