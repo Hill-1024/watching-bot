@@ -46,6 +46,11 @@ export class SupervisorClient implements RestrictedSupervisorClient {
     return r.logs;
   }
 
+  async readFile(id: RuntimeId, key: string): Promise<string> {
+    const r = await this.call<{ content: string }>("GET", `/v1/runtimes/${id}/files/${encodeURIComponent(key)}`);
+    return r.content;
+  }
+
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${this.baseUrl.replace(/\/$/, "")}${path}`;
     let res: Response;

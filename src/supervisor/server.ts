@@ -100,6 +100,16 @@ export function startSupervisorServer(deps: SupervisorServerDeps): { stop(): voi
     }
   });
 
+  app.get("/v1/runtimes/:id/files/:key", async (req, res) => {
+    try {
+      const id = runtimeOf(req.params.id) as keyof typeof RUNTIME_DEFINITIONS;
+      const content = await deps.supervisor.readFile(id, String(req.params.key ?? ""));
+      res.json({ runtime: id, key: req.params.key, content });
+    } catch (err) {
+      respondError(res, err);
+    }
+  });
+
   app.get("/v1/operations/:operationId", (req, res) => {
     const op = deps.supervisor.operation(req.params.operationId);
     if (!op) {

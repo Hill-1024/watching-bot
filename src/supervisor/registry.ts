@@ -61,6 +61,11 @@ export interface RuntimeDefinition {
   volumes: VolumeBinding[];
   ports: { kind: "webui" | "novnc"; containerPort: number; defaultHostPort: number }[];
   allowedEnvKeys: string[];
+  /**
+   * 允许通过 supervisor 只读的容器内配置文件(逻辑名 → 候选路径,按顺序取第一个存在的)。
+   * 支持 shell 通配符;路径全部来自这里的常量,调用方无法注入。
+   */
+  readableFiles: Record<string, string[]>;
   build(spec: RuntimeSettings): Omit<ContainerSpec, "runtime" | "name" | "image" | "labels" | "aliases">;
 }
 
@@ -79,6 +84,9 @@ export const RUNTIME_DEFINITIONS: Record<RuntimeId, RuntimeDefinition> = {
     ],
     ports: [{ kind: "webui", containerPort: 6099, defaultHostPort: 6099 }],
     allowedEnvKeys: ["NAPCAT_TOKEN", "NAPCAT_WEBUI_TOKEN", "QQ_ACCOUNT"],
+    readableFiles: {
+      webui: ["/app/napcat/config/webui.json"],
+    },
     build: (settings) => ({
       env: sanitizeEnv("napcat", settings.env),
       volumes: RUNTIME_DEFINITIONS.napcat.volumes,
@@ -112,6 +120,13 @@ export const RUNTIME_DEFINITIONS: Record<RuntimeId, RuntimeDefinition> = {
       { kind: "novnc", containerPort: 6081, defaultHostPort: 6081 },
     ],
     allowedEnvKeys: ["SNOWLUMA_TOKEN", "QQ_ACCOUNT"],
+    readableFiles: {
+      // SnowLuma 区分「通用」与「按账号」两份配置:登录后 WebUI 写入 onebot_<uin>.json 并覆盖前者,
+      // 必须优先读按账号的文件(含 wsServers[].accessToken),否则抓到的是未生效的旧 token。
+      onebot: ["/app/data/config/onebot_*.json", "/app/data/config/onebot.json"],
+      novnc: ["/app/data/config/vnc-password"],
+      webui: ["/app/data/config/webui.json"],
+    },
     build: (settings) => ({
       env: sanitizeEnv("snowluma", settings.env),
       volumes: RUNTIME_DEFINITIONS.snowluma.volumes,

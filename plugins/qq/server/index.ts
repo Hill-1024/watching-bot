@@ -44,6 +44,8 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
   const FULL_STEPS = ["安装目标", "断开旧连接", "停止旧进程", "启动新进程", "连接 OneBot"] as const;
   const LOCAL_STEPS = ["断开旧连接", "连接 OneBot"] as const;
 
+  const supervisorAvailable = () => Boolean(ctx.supervisor && cfg.supervisorUrl);
+
   const persistSelection = (id: RuntimeId): void => {
     ctx.storage.set("runtime.selected", id);
   };
@@ -61,11 +63,35 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
     ctx.publishCatalog?.();
   };
 
+  /** 从 runtime 自己的配置文件里读 OneBot token(SnowLuma: onebot.json 的 wsServers[].accessToken) */
+  const runtimeConfigToken = async (id: RuntimeId): Promise<string> => {
+    if (!ctx.supervisor || !supervisorAvailable() || id !== "snowluma") return "";
+    try {
+      const raw = await ctx.supervisor.readFile("snowluma", "onebot");
+      const parsed = JSON.parse(raw) as { networks?: { wsServers?: { accessToken?: string }[] } };
+      const token = parsed.networks?.wsServers?.find((s) => s.accessToken)?.accessToken ?? "";
+      return token.trim();
+    } catch (err) {
+      ctx.logger.warn(`读取 SnowLuma OneBot 配置失败: ${String(err)}`);
+      return "";
+    }
+  };
+
+  const storedToken = (id: RuntimeId): string => {
+    const v = ctx.storage.get<unknown>(`runtime.token.${id}`, "");
+    return typeof v === "string" ? v.trim() : "";
+  };
+
+  /** 生效 token:面板手填 > config 文件 > runtime 自身配置(自动抓取) */
+  const effectiveToken = async (id: RuntimeId): Promise<string> => {
+    return storedToken(id) || oneBotToken(id, cfg) || (await runtimeConfigToken(id));
+  };
+
   const connect = async (id: RuntimeId): Promise<void> => {
     await adapter.connect(
       {
         url: oneBotUrl(id, cfg),
-        token: oneBotToken(id, cfg),
+        token: await effectiveToken(id),
         selfId: cfg.selfId,
         dbPath: cfg.dbPath ?? "data/modules/napcat.db",
         memeDir: cfg.memeDir ?? "data/modules/memes",
@@ -84,7 +110,6 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
   await connect(selected);
   persistSelection(selected);
 
-  const supervisorAvailable = () => Boolean(ctx.supervisor && cfg.supervisorUrl);
 
   const supervisorStatus = async (): Promise<Record<string, unknown> | null> => {
     if (!ctx.supervisor) return null;
@@ -142,6 +167,11 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
       },
       runtimes: await describeRuntimes(),
       login: selected === "snowluma" ? loginInfoOf(selected, cfg, await snowlumaInitialCredentials()) : loginInfoOf(selected, cfg),
+      onebotToken: {
+        override: storedToken(selected),
+        effective: await effectiveToken(selected),
+        autoRead: !storedToken(selected) && Boolean(await runtimeConfigToken(selected)),
+      },
       lastError,
     };
   };
@@ -202,16 +232,37 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
     const out: SnowlumaInitialCredentials = {};
     try {
       if (ctx.supervisor) {
+        // 权威来源 1:noVNC 密码持久化在数据卷里,直接读文件(日志里打印的可能是已被覆盖的一次性值)
+        try {
+          const pw = (await ctx.supervisor.readFile("snowluma", "novnc")).trim();
+          if (pw) out.vncPassword = pw;
+        } catch (err) {
+          ctx.logger.warn(`读取 SnowLuma VNC 密码文件失败: ${String(err)}`);
+        }
+        // 权威来源 2:OneBot token 在 onebot.json 的 wsServers[].accessToken
+        const cfgToken = await runtimeConfigToken("snowluma");
+        if (cfgToken) {
+          out.onebotToken = cfgToken;
+          out.onebotTokenSource = storedToken("snowluma")
+            ? "面板手动设置优先"
+            : "已从 SnowLuma 的 onebot.json 自动读取";
+        } else if (storedToken("snowluma")) {
+          out.onebotToken = storedToken("snowluma");
+          out.onebotTokenSource = "面板手动设置";
+        }
+
         const text = await ctx.supervisor.logs("snowluma", 4000);
-        // WebUI 初始账密:最后一次打印的为准
+        // WebUI 初始账密:只在首次启动日志里出现,取最后一次打印的
         const cred = lastMatch(text, /initial credentials:\s*user=(\S+)\s+password=(\S+)/g);
         if (cred) {
           out.webuiUser = cred[1];
           out.webuiPassword = cred[2];
         }
-        // noVNC 密码:候选按打印时间倒序,逐个真实握手验证
-        const vncCandidates = allMatches(text, /(?:远程桌面密码|remote desktop password):\s*(\S+)/g).reverse();
-        out.vncPassword = verifyVncPassword([...new Set(vncCandidates)]);
+        // VNC 密码兜底:文件读不到时,把日志候选逐个对真实 5900 做握手验证
+        if (!out.vncPassword) {
+          const vncCandidates = allMatches(text, /(?:远程桌面密码|remote desktop password):\s*(\S+)/g).reverse();
+          out.vncPassword = verifyVncPassword([...new Set(vncCandidates)]);
+        }
       }
     } catch (err) {
       ctx.logger.warn(`解析 SnowLuma 初始凭据失败: ${String(err)}`);
@@ -334,6 +385,26 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
             lastError = `重连失败: ${String(err)}`;
             return { status: 502, body: { ok: false, error: lastError, state: await state() } };
           }
+        case "POST token": {
+          const raw = (req.body as { token?: unknown } | null)?.token;
+          if (raw !== undefined && typeof raw !== "string") {
+            return { status: 400, body: { error: "token 必须是字符串" } };
+          }
+          const token = typeof raw === "string" ? raw.trim() : "";
+          if (token.length > 512 || /[\r\n]/.test(token)) {
+            return { status: 400, body: { error: "token 过长或含换行" } };
+          }
+          if (token) ctx.storage.set(`runtime.token.${selected}`, token);
+          else ctx.storage.delete(`runtime.token.${selected}`);
+          initialCredentials = null;
+          try {
+            await reconnect();
+            return { body: { ok: true, state: await state() } };
+          } catch (err) {
+            lastError = `应用 token 后重连失败: ${String(err)}`;
+            return { status: 502, body: { ok: false, error: lastError, state: await state() } };
+          }
+        }
         case "POST restart":
           return restart();
         case "POST ports": {

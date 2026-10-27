@@ -106,6 +106,10 @@ export interface SnowlumaInitialCredentials {
   webuiUser?: string;
   webuiPassword?: string;
   vncPassword?: string;
+  /** 从 runtime 自身配置读到的 OneBot token(自动抓取) */
+  onebotToken?: string;
+  /** 该 token 的来源说明,给面板展示 */
+  onebotTokenSource?: string;
 }
 
 export interface LoginInfo {
@@ -173,10 +177,12 @@ export function loginInfoOf(
     entries: [
       {
         label: "OneBot Token",
-        value: token || undefined,
+        value: initial?.onebotToken || token || undefined,
         sensitive: true,
-        available: Boolean(token),
-        hint: "OneBot WS 使用该 token;留空表示不校验",
+        available: Boolean(initial?.onebotToken || token),
+        hint: initial?.onebotToken
+          ? initial.onebotTokenSource ?? "已自动读取"
+          : initial?.onebotTokenSource ?? "OneBot WS 使用该 token;留空表示不校验",
       },
       {
         label: "WebUI 初始账号",
@@ -200,8 +206,8 @@ export function loginInfoOf(
         sensitive: true,
         available: Boolean(initial?.vncPassword),
         hint: initial?.vncPassword
-          ? undefined
-          : "日志里的候选都未通过真实认证握手:密码持久化在数据卷(/app/data/config/vnc-password)中,可能被历史部署覆盖;可进容器 x11vnc -storepasswd 重设",
+          ? "直接读自数据卷 /app/data/config/vnc-password(权威值,随卷持久化)"
+          : "未能从数据卷读取,且日志候选未通过真实认证握手;可进容器执行 x11vnc -storepasswd 重设",
       },
     ],
     instructions: [

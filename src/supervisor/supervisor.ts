@@ -52,6 +52,31 @@ export class RuntimeSupervisor {
     return Promise.all(runtimeIds().map((id) => this.inspect(id)));
   }
 
+  /**
+   * 读取 runtime 的只读配置文件。逻辑名必须在 registry 的 readableFiles 白名单里,
+   * 路径完全由服务端决定 —— 调用方无法传入任意路径。
+   */
+  async readFile(id: RuntimeId, key: string): Promise<string> {
+    const def = RUNTIME_DEFINITIONS[id];
+    const candidates = def.readableFiles[key];
+    if (!candidates?.length) {
+      throw new ConfigError(`${id}: 不允许读取 ${key}`, [`files.${key} 不在白名单`]);
+    }
+    const info = await this.opts.engine.inspectContainer(def.containerName);
+    if (!info) throw new ConfigError(`${id} 容器未安装,无法读取 ${key}`, ["容器不存在"]);
+    if (info.state !== "running") throw new ConfigError(`${id} 容器未运行,无法读取 ${key}`, [`当前状态 ${info.state}`]);
+    let lastErr: unknown;
+    for (const candidate of candidates) {
+      try {
+        const content = await this.opts.engine.readContainerFile(def.containerName, candidate);
+        if (content.trim()) return content;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw new ConfigError(`${id}: 读取 ${key} 失败`, [String(lastErr ?? "所有候选路径均为空")]);
+  }
+
   async inspect(id: RuntimeId): Promise<RuntimeStatusView> {
     const def = RUNTIME_DEFINITIONS[id];
     const container = await this.opts.engine.inspectContainer(def.containerName);

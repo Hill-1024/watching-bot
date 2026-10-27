@@ -23,6 +23,8 @@ export interface DockerEngine {
   restartContainer(name: string, timeoutSec?: number): Promise<void>;
   removeContainer(name: string): Promise<void>;
   logs(name: string, tail: number): Promise<string>;
+  /** 读取容器内单个文件(仅用于 registry 白名单里的配置路径) */
+  readContainerFile(name: string, path: string): Promise<string>;
   ensureNetwork(name: string): Promise<void>;
 }
 
@@ -165,6 +167,32 @@ export class HttpDockerEngine implements DockerEngine {
     return demux(buf).slice(-200_000);
   }
 
+  /** Docker exec：读取容器内文件。path 可含通配符(取最近修改的一个);只接受 registry 里的常量路径。 */
+  async readContainerFile(name: string, path: string): Promise<string> {
+    // 通配符由 ls 展开并按 mtime 取最新;路径来自服务端常量,不接受调用方任意输入
+    const script = `f=$(ls -1t ${path} 2>/dev/null | head -n 1); [ -n "$f" ] || exit 3; cat "$f"`;
+    const created = await this.call(
+      "POST",
+      `/containers/${encodeURIComponent(name)}/exec`,
+      { AttachStdout: true, AttachStderr: true, Cmd: ["sh", "-c", script] },
+      true,
+    );
+    if (created.status >= 400) throw new Error(`创建 exec 失败: ${trim(await created.text())}`);
+    const execId = (await created.json() as { Id?: string } | null)?.Id;
+    if (!execId) throw new Error("exec 未返回 Id");
+
+    const started = await this.call("POST", `/exec/${encodeURIComponent(execId)}/start`, { Detach: false, Tty: false }, true);
+    if (started.status >= 400) throw new Error(`启动 exec 失败: ${trim(await started.text())}`);
+    const out = demux(Buffer.from(await started.arrayBuffer()));
+
+    const info = await this.call("GET", `/exec/${encodeURIComponent(execId)}/json`, undefined, true);
+    const exitCode = (await info.json() as { ExitCode?: number } | null)?.ExitCode;
+    if (exitCode !== 0 && exitCode !== null && exitCode !== undefined) {
+      throw new Error(`读取失败(exit ${exitCode}): ${trim(out)}`);
+    }
+    return out;
+  }
+
   async ensureNetwork(name: string): Promise<void> {
     const res = await this.call("GET", `/networks/${encodeURIComponent(name)}`, undefined, true);
     if (res.status === 200) return;
@@ -235,7 +263,12 @@ class DockerResponse {
     return new Promise((resolvePromise, reject) => {
       const chunks: Buffer[] = [];
       this.res.on("data", (c: Buffer) => chunks.push(c));
-      this.res.on("end", () => resolvePromise(Buffer.concat(chunks).buffer as ArrayBuffer));
+      this.res.on("end", () => {
+        // Buffer.concat 的底层 ArrayBuffer 可能是 8KB 共享池,必须按 byteOffset/byteLength 切片,
+        // 否则会把池里的无关字节一起返回(exec 读配置时表现为 JSON 尾部多出垃圾)。
+        const buf = Buffer.concat(chunks);
+        resolvePromise(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer);
+      });
       this.res.on("error", reject);
     });
   }

@@ -30,6 +30,7 @@ export default defineComponent({
     const logs = ref("");
     const showLogs = ref(false);
     const portDraft = ref({ webui: "", novnc: "" });
+    const tokenDraft = ref("");
 
     const selectedRuntime = computed(() => state.value?.runtimes?.find((r) => r.selected) ?? null);
     const connection = computed(() => state.value?.connection ?? { onebot: "unknown", login: null });
@@ -70,6 +71,7 @@ export default defineComponent({
           novnc: current.novncPort ? String(current.novncPort) : "",
         };
       }
+      tokenDraft.value = next?.onebotToken?.override ?? "";
     }
 
     async function load({ quiet = false } = {}) {
@@ -107,6 +109,15 @@ export default defineComponent({
 
     const reconnect = () => run("reconnect", () => pluginAction("qq", "reconnect", { method: "POST" }), "重连完成");
     const restart = () => run("restart", () => pluginAction("qq", "restart", { method: "POST" }), "已重启运行时");
+
+    function saveToken() {
+      return run("token", () =>
+        pluginAction("qq", "token", {
+          method: "POST",
+          body: { token: String(tokenDraft.value || "").trim() },
+        }),
+      tokenDraft.value.trim() ? "OneBot token 已保存并重连" : "已清除手填 token(改用自动读取)");
+    }
 
     function savePorts() {
       return run("ports", async () => {
@@ -160,6 +171,7 @@ export default defineComponent({
       logs,
       showLogs,
       portDraft,
+      tokenDraft,
       selectedRuntime,
       connection,
       login,
@@ -173,6 +185,7 @@ export default defineComponent({
       reconnect,
       restart,
       savePorts,
+      saveToken,
       loadLogs,
       copy,
       load,
@@ -270,6 +283,24 @@ export default defineComponent({
           <ul v-if="selectedRuntime?.securityNotes?.length" class="notes">
             <li v-for="(n, i) in selectedRuntime.securityNotes" :key="i">{{ n }}</li>
           </ul>
+        </Panel>
+
+        <Panel title="OneBot 访问 token" class="span-2">
+          <div class="form-inline">
+            <label>手填 token
+              <input class="input input-sm" v-model="tokenDraft" autocomplete="off" spellcheck="false"
+                :placeholder="state?.onebotToken?.autoRead ? '留空 = 自动从运行时配置读取' : '留空 = 不校验'" />
+            </label>
+            <button class="btn btn-ghost btn-sm" :disabled="!!busy" @click="saveToken">
+              <Spinner v-if="busy === 'token'" :size="14" />保存并重连
+            </button>
+          </div>
+          <p class="muted small">
+            <template v-if="state?.onebotToken?.autoRead">
+              已自动从运行时配置读取 token({{ state.onebotToken.effective ? '已获取' : '未获取' }})。
+            </template>
+            SnowLuma 绑定 0.0.0.0 时必须设 access token;这里的值优先于自动读取,清空即恢复自动。
+          </p>
         </Panel>
 
         <Panel title="宿主端口" class="span-2">

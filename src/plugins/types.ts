@@ -72,6 +72,8 @@ export interface RestrictedSupervisorClient {
   restart(id: RuntimeId): Promise<RuntimeStatusView>;
   recreate(id: RuntimeId, settings?: Record<string, unknown>): Promise<RuntimeStatusView>;
   logs(id: RuntimeId, tail?: number): Promise<string>;
+  /** 读取 runtime 白名单内的配置文件(如 SnowLuma 的 onebot.json / vnc-password) */
+  readFile(id: RuntimeId, key: string): Promise<string>;
 }
 
 export interface RuntimeStatusView {
