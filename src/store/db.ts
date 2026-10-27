@@ -42,9 +42,11 @@ export interface InjectionRow {
 }
 
 export function openDb(dataDir: string): DbHandles {
+  // sqlite 的 ":memory:" 是特殊库名,不能当路径 resolve/mkdir(Windows 下还会直接报非法路径)
+  const isMemory = dataDir.includes(":memory:");
   const dir = resolve(dataDir);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const path = resolve(dir, "watching-bot.db");
+  if (!isMemory && !existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const path = isMemory ? dataDir : resolve(dir, "watching-bot.db");
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.exec(`
