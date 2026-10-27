@@ -1,6 +1,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "/vendor/vue.esm-browser.prod.js";
+import { onLive } from "../live.js";
 import { api } from "../api.js";
-import { setInjectionsLive, store } from "../store.js";
+import { fetchInjections, setInjectionsLive, store } from "../store.js";
 import { fmtDateTime, fmtNum, relativeTime } from "../utils.js";
 
 export const InjectionsPage = {
@@ -100,12 +101,18 @@ export const InjectionsPage = {
     }
 
     let ticker = null;
+    let offLive = null;
     onMounted(() => {
-      ticker = setInterval(() => (now.value = Date.now()), 3000);
+      ticker = setInterval(() => (now.value = Date.now()), 5000);
+      // 只有本页挂载时才响应 injections 事件并增量拉取
+      offLive = onLive("injections", () => void fetchInjections());
       if (tab.value === "history") void loadHistory();
       else nextTick(scrollToBottom);
     });
-    onBeforeUnmount(() => clearInterval(ticker));
+    onBeforeUnmount(() => {
+      clearInterval(ticker);
+      offLive?.();
+    });
 
     return {
       store,

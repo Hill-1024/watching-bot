@@ -1,14 +1,16 @@
 import express from "express";
-import { existsSync, statSync } from "node:fs";
-import { connect } from "node:net";
-import { resolve } from "node:path";
-import type { ModuleBus } from "../bus/types.js";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { extname, resolve } from "node:path";
 import type { SimClock } from "../core/clock.js";
 import { HOUR, fmtSim } from "../core/clock.js";
 import type { AgentCore } from "../core/loop.js";
 import type { ModelManager, ModelOverride } from "../core/model-manager.js";
 import { aggregateUsage, type UsageBucketUnit } from "../core/usage.js";
-import type { QqBackend } from "../qq-backend.js";
+import type { StateChange } from "../state/changes.js";
+import type { PluginHost } from "../plugins/host.js";
+import { isInside } from "../plugins/manifest.js";
+import { attachSse, statusSnapshot, type LiveHub } from "./live.js";
 import type { Repo } from "../store/db.js";
 
 export interface VarDef {
@@ -25,52 +27,31 @@ export interface PanelMemory {
   readDiary(dateIso: string): string | null;
 }
 
-export interface BuiltinPanelConfig {
-  master: { name: string; qq: number };
-  coffee: { dailyQuota: number; refillSimHour: number };
-}
-
-export interface BuiltinPanelPatch {
-  master?: { name?: string; qq?: number };
-  coffee?: { dailyQuota?: number };
+/** 状态层只暴露只读诊断,面板不直接改内部结构 */
+export interface PanelStateView {
+  recentChanges(limit?: number): StateChange[];
+  changesSince(after: number, limit?: number): { changes: StateChange[]; lastSeq: number; reset: boolean };
+  pulseView(): { suppressedPerceptions: number; suppressedSocialTools: number };
 }
 
 export interface PanelDeps {
   clock: SimClock;
   core: AgentCore;
-  bus: ModuleBus;
+  plugins: PluginHost;
+  state: PanelStateView;
+  live: LiveHub;
   repo: Repo;
   modelManager: ModelManager;
   memory: PanelMemory;
   /** 状态变量上下限(面板钳制与渲染用) */
   varDefs: Record<string, VarDef>;
-  /** 已注册的模块工厂名(热插拔展示用) */
-  knownModules: string[];
   /** 进程启动时间(真实 ms) */
   startedAt: number;
   /** 面板切换模型后,把新句柄热替换到 pi Agent(在 index.ts 闭包里做) */
   onModelChanged(): void;
-  /** builtin 模块的咖啡配给(动态解析,模块未启用时返回 null) */
-  coffee(): { remaining(): number; grant(n: number): void } | null;
-  /** builtin 模块的运行时配置(动态解析,模块未启用时返回 null) */
-  builtinConfig(): { view(): BuiltinPanelConfig; update(patch: BuiltinPanelPatch): void } | null;
-  /** NapCat WebUI 登录 token、端口与来源;onebot 为 ws 连接 token */
-  napcatToken(): {
-    token: string;
-    source: "webui-config" | "env" | "none";
-    port: number;
-    exists: boolean;
-    onebot: { token: string; source: "config" | "env" | "none" };
-  };
-  /** 把 WebUI 端口写回 NapCat 配置(重启 NapCat 后生效) */
-  setNapcatWebuiPort(port: number): number;
-  /** 当前使用的 QQ 接入运行时 */
-  qqBackend(): QqBackend;
-  /** 热切换 QQ 接入运行时(互斥,成功后持久化) */
-  setQqBackend(name: QqBackend): Promise<{ ok: boolean; error?: string }>;
-  /** 模块热插拔 */
-  setModule(name: string, enable: boolean): Promise<{ ok: boolean; error?: string }>;
   port: number;
+  /** 监听地址:默认 loopback;容器内需要 0.0.0.0 */
+  host?: string;
   token: string;
   log(msg: string): void;
 }
@@ -84,23 +65,6 @@ function numberParam(v: unknown, fallback: number): number {
 
 function clampInt(v: unknown, fallback: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(numberParam(v, fallback))));
-}
-
-function probePort(port: number, timeoutMs = 800): Promise<boolean> {
-  return new Promise((resolveProbe) => {
-    let settled = false;
-    const socket = connect({ host: "127.0.0.1", port });
-    const done = (reachable: boolean): void => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      resolveProbe(reachable);
-    };
-    socket.setTimeout(timeoutMs, () => done(false));
-    socket.once("connect", () => done(true));
-    socket.once("error", () => done(false));
-    socket.once("close", () => done(false));
-  });
 }
 
 function pageParams(req: express.Request, defaultSize = 50): { page: number; pageSize: number } {
@@ -126,15 +90,52 @@ function fileMtime(path: string): number | null {
  */
 export function startPanel(deps: PanelDeps): { stop(): void } {
   const app = express();
+  app.disable("x-powered-by");
   app.use(express.json({ limit: "256kb" }));
 
+  const expected = deps.token ? Buffer.from(deps.token) : null;
+
+  const tokenMatches = (candidate: string): boolean => {
+    if (!expected) return true;
+    const given = Buffer.from(candidate);
+    if (given.length !== expected.length) return false;
+    return timingSafeEqual(given, expected);
+  };
+
   const auth = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
-    if (!deps.token) return next();
     const header = req.headers.authorization ?? "";
-    const q = typeof req.query.token === "string" ? req.query.token : "";
-    if (header === `Bearer ${deps.token}` || q === deps.token) return next();
+    const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
+    // 兼容旧的 ?token= 传参(逐步淘汰),但绝不回写进 URL
+    const fromQuery = typeof req.query.token === "string" ? req.query.token : "";
+    if (tokenMatches(bearer) || (fromQuery !== "" && tokenMatches(fromQuery))) {
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return next();
+    }
     res.status(401).json({ error: "unauthorized" });
   };
+
+  /** 存活探针:进程在听即可,不含状态、不含秘密 */
+  app.get("/healthz", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true });
+  });
+
+  /** 就绪探针:时钟已走、数据库还能读。仍然不返回变量或 token */
+  app.get("/readyz", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const sim = deps.clock.simNow();
+      const bytes = deps.repo.fileBytes();
+      if (!Number.isFinite(sim)) {
+        res.status(503).json({ ok: false, reason: "clock" });
+        return;
+      }
+      res.json({ ok: true, dbBytes: bytes });
+    } catch {
+      res.status(503).json({ ok: false, reason: "db" });
+    }
+  });
 
   app.get("/api/status", auth, (_req, res) => {
     const simMs = deps.clock.simNow();
@@ -151,13 +152,31 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
       pendingAlarms: deps.repo.pendingAlarmCount(),
       vars: snap.vars,
       defs: deps.varDefs,
-      modules: deps.bus.status(),
-      knownModules: deps.knownModules,
-      qqBackend: deps.qqBackend(),
+      modules: deps.plugins.status(),
+      plugins: deps.plugins.plugins(),
+      statePulse: deps.state.pulseView(),
       activityLastSeq: deps.core.activityLastSeq(),
       memoryUpdatedAt: fileMtime(deps.memory.indexPath()),
       panel: { port: deps.port, authRequired: Boolean(deps.token) },
+      dbBytes: deps.repo.fileBytes(),
     });
+  });
+
+  /** 事件推送(SSE):面板据此按 topic 更新,不做固定频率轮询 */
+  app.get("/api/events", auth, (req, res) => {
+    attachSse(req, res, deps.live, deps.log);
+  });
+
+  /** 状态变化因果链(增量拉取) */
+  app.get("/api/state/changes", auth, (req, res) => {
+    const after = numberParam(req.query.after, 0);
+    const limit = clampInt(req.query.limit, 100, 1, 400);
+    if (after > 0) {
+      res.json(deps.state.changesSince(after, limit));
+      return;
+    }
+    const changes = deps.state.recentChanges(limit);
+    res.json({ changes, lastSeq: changes.at(-1)?.seq ?? 0, reset: false });
   });
 
   /** 状态历史:区间采样,修复旧版 since=0 永远返回最早 600 行的问题 */
@@ -240,6 +259,8 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
     }
     const clamped = Math.max(def.min, Math.min(def.max, value));
     const snap = deps.core.applyState({ type: "setVar", name, value: clamped });
+    deps.live.publish("state");
+    deps.live.publish("status", statusSnapshot({ clock: deps.clock, core: deps.core, state: deps.state }));
     deps.log(`[panel] 状态调整 ${name} = ${clamped}`);
     res.json({ ok: true, vars: snap.vars, applied: snap.vars[name], clamped: clamped !== value });
   });
@@ -248,6 +269,8 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
     deps.log("[panel] 手动触发睡眠归并");
     try {
       await deps.core.runConsolidation();
+      deps.live.publish("memory");
+      deps.live.publish("status", statusSnapshot({ clock: deps.clock, core: deps.core, state: deps.state }));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ ok: false, error: String(err) });
@@ -256,11 +279,13 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
 
   app.post("/api/sleep", auth, (_req, res) => {
     deps.core.requestSleep("panel");
+    deps.live.publish("status", statusSnapshot({ clock: deps.clock, core: deps.core, state: deps.state }));
     res.json({ ok: true });
   });
 
   app.post("/api/wake", auth, (_req, res) => {
     deps.core.forceWake("panel");
+    deps.live.publish("status", statusSnapshot({ clock: deps.clock, core: deps.core, state: deps.state }));
     res.json({ ok: true });
   });
 
@@ -271,50 +296,76 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
       return;
     }
     deps.clock.setTimeScale(value);
+    deps.live.publish("status", statusSnapshot({ clock: deps.clock, core: deps.core, state: deps.state }));
     deps.log(`[panel] timeScale → ${value}`);
     res.json({ ok: true, timeScale: value });
   });
 
-  app.post("/api/modules", auth, async (req, res) => {
-    const { name, enable } = req.body as { name?: string; enable?: boolean };
-    if (typeof name !== "string" || typeof enable !== "boolean") {
-      res.status(400).json({ error: "需要 { name, enable }" });
+  // ---------- 插件(通用,主服务不包含任何插件业务知识) ----------
+
+  app.get("/api/plugins", auth, (_req, res) => {
+    res.json({ plugins: deps.plugins.plugins() });
+  });
+
+  app.get("/api/plugins/:id", auth, (req, res) => {
+    const id = (req.params.id ?? "");
+    if (!deps.plugins.has(id)) {
+      res.status(404).json({ error: `未找到插件: ${id}` });
       return;
     }
-    if (name === "napcat" || name === "snowluma") {
-      res.status(400).json({ error: "QQ 接入请在“QQ 接入”选择器中切换" });
+    res.json(deps.plugins.view(id));
+  });
+
+  app.post("/api/plugins/:id/start", auth, async (req, res) => {
+    const id = (req.params.id ?? "");
+    if (!deps.plugins.has(id)) {
+      res.status(404).json({ error: `未找到插件: ${id}` });
       return;
     }
     try {
-      const r = await deps.setModule(name, enable);
-      if (!r.ok) {
-        res.status(400).json(r);
-        return;
-      }
-      deps.core.refreshAgentTools();
-      res.json({ ok: true });
+      await deps.plugins.startOne(id);
+      res.json({ ok: true, plugin: deps.plugins.view(id) });
     } catch (err) {
       res.status(500).json({ ok: false, error: String(err) });
     }
   });
 
-  /** QQ 接入后端:互斥切换 NapCat / SnowLuma,成功后写 data/qq-backend.json */
-  app.post("/api/qq-backend", auth, async (req, res) => {
-    const { name } = req.body as { name?: unknown };
-    if (name !== "napcat" && name !== "snowluma") {
-      res.status(400).json({ error: "name 需为 napcat 或 snowluma" });
+  app.post("/api/plugins/:id/stop", auth, async (req, res) => {
+    const id = (req.params.id ?? "");
+    if (!deps.plugins.has(id)) {
+      res.status(404).json({ error: `未找到插件: ${id}` });
       return;
     }
     try {
-      const r = await deps.setQqBackend(name);
-      if (!r.ok) {
-        res.status(400).json(r);
-        return;
-      }
-      res.json({ ok: true, backend: name });
+      const stopped = await deps.plugins.stopOne(id);
+      res.json({ ok: stopped, plugin: deps.plugins.view(id) });
     } catch (err) {
-      res.status(500).json({ ok: false, error: `切换 QQ 接入失败: ${String(err)}` });
+      res.status(500).json({ ok: false, error: String(err) });
     }
+  });
+
+  /**
+   * 通用动作转发:主服务只做鉴权、路径/大小校验和插件查找,
+   * 不认识「咖啡」或「runtime 切换」这类业务。
+   */
+  app.all("/api/plugins/:id/actions/*", auth, async (req, res) => {
+    const id = (req.params.id ?? "");
+    if (!deps.plugins.has(id)) {
+      res.status(404).json({ error: `未找到插件: ${id}` });
+      return;
+    }
+    const action = (req.params as Record<string, string>)[0] ?? "";
+    const query: Record<string, string> = {};
+    for (const [k, v] of Object.entries(req.query)) {
+      if (typeof v === "string") query[k] = v.slice(0, 200);
+    }
+    const result = await deps.plugins.handle(id, {
+      method: req.method,
+      path: action,
+      query,
+      body: req.body,
+    });
+    res.status(result.status ?? 200).json(result.body);
   });
 
   // ---------- 模型配置(热切换) ----------
@@ -340,132 +391,8 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
       return;
     }
     deps.onModelChanged();
+    deps.live.publish("model");
     res.json({ ok: true, model: deps.modelManager.view() });
-  });
-
-  /** 咖啡配给(builtin 模块) */
-  app.get("/api/coffee", auth, (_req, res) => {
-    const coffee = deps.coffee();
-    if (!coffee) {
-      res.status(404).json({ error: "builtin 模块未启用" });
-      return;
-    }
-    res.json({ remaining: coffee.remaining() });
-  });
-
-  app.post("/api/coffee", auth, (req, res) => {
-    const coffee = deps.coffee();
-    if (!coffee) {
-      res.status(404).json({ error: "builtin 模块未启用" });
-      return;
-    }
-    const n = Math.max(0, Math.min(20, Math.round(numberParam((req.body as { n?: number }).n, 1))));
-    coffee.grant(n);
-    deps.log(`[panel] 主人补了 ${n} 杯咖啡,现存 ${coffee.remaining()}`);
-    res.json({ ok: true, remaining: coffee.remaining() });
-  });
-
-  /** builtin 配置:主人称呼/QQ 与每日默认咖啡配额(敏感值仅走鉴权面板,不写日志) */
-  app.get("/api/builtin/config", auth, (_req, res) => {
-    const cfg = deps.builtinConfig();
-    if (!cfg) {
-      res.status(404).json({ error: "builtin 模块未启用" });
-      return;
-    }
-    res.json(cfg.view());
-  });
-
-  app.patch("/api/builtin/config", auth, (req, res) => {
-    const cfg = deps.builtinConfig();
-    if (!cfg) {
-      res.status(404).json({ error: "builtin 模块未启用" });
-      return;
-    }
-    const body = (req.body ?? {}) as {
-      master?: { name?: unknown; qq?: unknown };
-      coffee?: { dailyQuota?: unknown };
-    };
-    const patch: BuiltinPanelPatch = {};
-    if (body.master && typeof body.master === "object") {
-      if (typeof body.master.name === "string") {
-        const name = body.master.name.trim().slice(0, 40);
-        if (!name) {
-          res.status(400).json({ error: "主人称呼不能为空" });
-          return;
-        }
-        patch.master = { ...(patch.master ?? {}), name };
-      }
-      const qq = numberParam(body.master.qq, NaN);
-      if (Number.isFinite(qq)) {
-        patch.master = {
-          ...(patch.master ?? {}),
-          qq: Math.max(0, Math.min(9_999_999_999_999, Math.round(qq))),
-        };
-      }
-    }
-    if (body.coffee && typeof body.coffee === "object") {
-      const quota = numberParam(body.coffee.dailyQuota, NaN);
-      if (Number.isFinite(quota)) {
-        patch.coffee = { dailyQuota: Math.max(0, Math.min(50, Math.round(quota))) };
-      }
-    }
-    if (!patch.master && !patch.coffee) {
-      res.status(400).json({ error: "没有可更新的配置项" });
-      return;
-    }
-    try {
-      const before = cfg.view();
-      cfg.update(patch);
-      const after = cfg.view();
-      if (after.master.qq !== before.master.qq) {
-        deps.core.setMasterQQ(after.master.qq);
-        deps.log("[panel] 主人 QQ 已更新");
-      }
-      deps.core.refreshAgentTools();
-      deps.log("[panel] builtin 配置已更新");
-      res.json({ ok: true, ...after });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: `保存失败: ${String(err)}` });
-    }
-  });
-
-  /** NapCat WebUI 登录 token 与端口(配置或环境变量) */
-  app.get("/api/napcat/token", auth, async (_req, res) => {
-    const info = deps.napcatToken();
-    const reachable = info.port > 0 ? await probePort(info.port) : false;
-    res.json({ ...info, reachable });
-  });
-
-  /** 保存 NapCat WebUI 端口;新端口需重启 NapCat 才生效 */
-  app.patch("/api/napcat/webui", auth, async (req, res) => {
-    const info = deps.napcatToken();
-    if (!info.exists) {
-      res.status(404).json({ error: "未找到 NapCat WebUI 配置" });
-      return;
-    }
-    const raw = (req.body as { port?: unknown }).port;
-    const port = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      res.status(400).json({ error: "端口需为 1-65535 的整数" });
-      return;
-    }
-    if (port === info.port) {
-      res.json({ ok: true, port, changed: false });
-      return;
-    }
-    try {
-      const saved = deps.setNapcatWebuiPort(port);
-      res.json({ ok: true, port: saved, changed: true });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: `保存端口失败: ${String(err)}` });
-    }
-  });
-
-  /** 当前保存的 WebUI 端口是否已监听(供面板等待 NapCat 重启) */
-  app.get("/api/napcat/webui/status", auth, async (_req, res) => {
-    const info = deps.napcatToken();
-    const reachable = info.port > 0 ? await probePort(info.port) : false;
-    res.json({ port: info.port, reachable });
   });
 
   // ---------- 长期记忆(摘要) ----------
@@ -538,6 +465,54 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
     });
   });
 
+  // ---------- 插件面板与静态资源 ----------
+
+  const MIME: Record<string, string> = {
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".woff2": "font/woff2",
+  };
+
+  const serveFrom = (
+    baseDir: string | null,
+    rel: string,
+    res: express.Response,
+  ): void => {
+    if (!baseDir) {
+      res.status(404).json({ error: "plugin has no such directory" });
+      return;
+    }
+    const target = resolve(baseDir, rel);
+    if (!isInside(baseDir, target) || !existsSync(target) || !statSync(target).isFile()) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.type(MIME[extname(target).toLowerCase()] ?? "application/octet-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(readFileSync(target));
+  };
+
+  // 插件面板是「安装即信任」的本地代码,按静态资源提供(不含秘密);
+  // 它调用的 API 仍然逐个鉴权。这样动态 import 不必把 token 放进 URL。
+  app.get("/plugins/:id/panel/*", (req, res) => {
+    const rel = (req.params as Record<string, string>)[0] ?? "";
+    serveFrom(deps.plugins.panelDir((req.params.id ?? "")), rel, res);
+  });
+
+  app.get("/plugins/:id/assets/*", (req, res) => {
+    const rel = (req.params as Record<string, string>)[0] ?? "";
+    serveFrom(deps.plugins.assetDir((req.params.id ?? "")), rel, res);
+  });
+
   // 前端静态资源:始终 revalidate,避免改了面板却被浏览器缓存住
   app.use(
     express.static(resolve("src/web/public"), {
@@ -547,8 +522,8 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
     }),
   );
 
-  const server = app.listen(deps.port, () => {
-    deps.log(`[panel] 管理面板 http://127.0.0.1:${deps.port}/?token=***`);
+  const server = app.listen(deps.port, deps.host ?? "127.0.0.1", () => {
+    deps.log(`[panel] 管理面板 http://${deps.host ?? "127.0.0.1"}:${deps.port}/?token=***`);
   });
   return { stop: () => server.close() };
 }

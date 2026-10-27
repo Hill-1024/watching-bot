@@ -1,9 +1,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "/vendor/vue.esm-browser.prod.js";
+import { onLive } from "../live.js";
 import { api } from "../api.js";
 import { SOURCE_LABEL, SOURCE_TONE, USAGE_COLORS } from "../meta.js";
 import {
   addDays,
   bucketUnitLabel,
+  debounce,
   compactNum,
   customRange,
   dateToIso,
@@ -15,6 +17,7 @@ import {
   pctDelta,
   presetRange,
   RANGE_PRESETS,
+  setIfChanged,
 } from "../utils.js";
 
 export const UsagePage = {
@@ -56,7 +59,7 @@ export const UsagePage = {
       try {
         const d = await api(`/api/usage?since=${Math.floor(r.since)}&until=${Math.floor(r.until)}&bucket=auto`);
         if (id !== requestId) return;
-        data.value = d;
+        setIfChanged(data, d);
         loadedAt.value = Date.now();
       } catch (err) {
         if (id === requestId) error.value = err.message || "Token 统计读取失败";
@@ -146,16 +149,17 @@ export const UsagePage = {
     const recentRows = computed(() => data.value?.recent || []);
     const hasData = computed(() => (totals.value?.requests || 0) > 0);
 
-    let timer = null;
+    // 只在这个页面挂载时订阅 usage;模型调用结束才会刷新
+    let off = null;
+    const scheduleLoad = debounce(() => {
+      nowTick.value = Date.now();
+      void load();
+    }, 800);
     onMounted(() => {
       void load();
-      timer = setInterval(() => {
-        if (document.hidden) return;
-        nowTick.value = Date.now();
-        void load();
-      }, 30_000);
+      off = onLive("usage", scheduleLoad);
     });
-    onBeforeUnmount(() => clearInterval(timer));
+    onBeforeUnmount(() => off?.());
 
     return {
       preset,

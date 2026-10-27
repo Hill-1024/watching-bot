@@ -33,6 +33,8 @@ export interface AgentCoreDeps {
   masterQQ: number;
   /** token 用量统一落库(主 agent 的每次 assistant 回复) */
   usage?: UsageRecorder;
+  /** 有新活动日志条目时通知(面板事件驱动刷新) */
+  onActivity?: (entry: ActivityEntry) => void;
   log?: (msg: string) => void;
 }
 
@@ -52,7 +54,6 @@ export class AgentCore implements CoreCommands, MachineHost {
   private nextKickSim: number | null = null;
   private cancelKick: (() => void) | null = null;
   private kicking = false;
-  private emptyBackoffMul = 1;
   private mentionTimes: number[] = [];
   private privateMsgTimes: { at: number; master: boolean }[] = [];
   private lastHistorySampleSim = 0;
@@ -138,10 +139,12 @@ export class AgentCore implements CoreCommands, MachineHost {
     const trimmed = text.slice(0, AgentCore.ACTIVITY_TEXT_CAP);
     const tsSim = this.clock.simNow();
     const tsReal = Date.now();
-    this.activityBuf.push({ seq: ++this.activitySeq, tsSim, tsReal, kind, text: trimmed });
+    const entry: ActivityEntry = { seq: ++this.activitySeq, tsSim, tsReal, kind, text: trimmed };
+    this.activityBuf.push(entry);
     if (this.activityBuf.length > AgentCore.ACTIVITY_CAP) this.activityBuf.shift();
     this.deps.repo.insertActivity(tsSim, tsReal, kind, trimmed);
     if (++this.activityInserts % 500 === 0) this.deps.repo.pruneActivityLog(20_000);
+    this.deps.onActivity?.(entry);
   }
 
   /**
@@ -186,7 +189,6 @@ export class AgentCore implements CoreCommands, MachineHost {
                 .map((c) => c.name ?? "")
             : [];
         const textLen = this.assistantTextLen(event.message);
-        this.applyState({ type: "turn" });
         this.events.emit({ type: "turn_end", toolNames, textLen });
       } else if (event.type === "message_end") {
         const m = event.message as { role?: string; content?: unknown; stopReason?: string; errorMessage?: string };
@@ -313,6 +315,10 @@ export class AgentCore implements CoreCommands, MachineHost {
   }
 
   private scheduleKickAt(atSim: number, reason: string): void {
+    if (this.kicking || this.deps.agent.state.isStreaming) {
+      // 正在输出时不打断、不补踢。QQ 消息已经进了未读库,等它自己去看。
+      return;
+    }
     if (this.nextKickSim != null && this.nextKickSim <= atSim) return;
     this.cancelKick?.();
     this.nextKickSim = atSim;
@@ -330,12 +336,7 @@ export class AgentCore implements CoreCommands, MachineHost {
     if (this.kicking) return;
     if (this.machine.phase !== "awake" && this.machine.phase !== "waking") return; // 睡着/转换中不踢
     const agent = this.deps.agent;
-    if (agent.state.isStreaming) {
-      // 运行中来触发:转 steer 注入,不打断当前 run
-      const pending = this.deps.injector.drain();
-      for (const m of pending) agent.steer(m);
-      return;
-    }
+    if (agent.state.isStreaming) return;
     this.kicking = true;
     try {
       const batch: AgentMessage[] = this.deps.injector.drain();
@@ -382,30 +383,14 @@ export class AgentCore implements CoreCommands, MachineHost {
 
     if (machine.phase !== "awake") return; // 已入睡,run 自然结束
 
-    // 空响应退避:没调工具且几乎没说话
     const lastMsgs = agentTailTexts(this.deps.agent);
-    const hadToolCalls = lastMsgs.toolCalls > 0;
-    this.events.emit({ type: "run_end", hadToolCalls, textLen: lastMsgs.textLen });
-    if (!hadToolCalls && lastMsgs.textLen < 8) {
-      this.emptyBackoffMul = Math.min(
-        this.emptyBackoffMul * 2,
-        this.deps.cfg.loop.emptyBackoffMaxSimMinutes / this.deps.cfg.loop.emptyBackoffBaseSimMinutes,
-      );
-    } else {
-      this.emptyBackoffMul = 1;
-    }
-    const idleSimMin = Math.min(
-      this.deps.cfg.loop.heartbeatSimMinutes * this.emptyBackoffMul,
-      this.deps.cfg.loop.emptyBackoffMaxSimMinutes,
-    );
-    // 有待注入体感 → 1 模拟分内感知;否则心跳/退避
-    // 注意:模型已 wait(N) 时绝不提前心跳 —— 否则长 wait 被心跳砍短(「wait 是假的」bug)
+    this.events.emit({ type: "run_end", hadToolCalls: lastMsgs.toolCalls > 0, textLen: lastMsgs.textLen });
+    // 模型自己 wait(N) 时尊重那个时刻;否则无限循环立刻继续,不插入心跳间隔
     if (this.nextKickSim != null) {
-      this.log(`[loop] 已有待触发(如 wait/闹钟),跳过心跳排程`);
+      this.log(`[loop] 已有待触发(如 wait),到点再继续`);
       return;
     }
-    const wait = this.deps.injector.pendingCount > 0 ? 1 : idleSimMin;
-    this.scheduleKickIn(wait * MIN, `idle:x${this.emptyBackoffMul}`);
+    this.scheduleKickAt(this.clock.simNow(), "continue");
   }
 
   // ---------- 感知 ----------
@@ -415,12 +400,17 @@ export class AgentCore implements CoreCommands, MachineHost {
     if (kind === "mention") {
       this.mentionTimes.push(this.clock.simNow());
     }
-    // 清醒时:消息/被@ → 微妙体感(按 kind 去重灌水),模型自己决定看不看
-    if (this.machine.phase === "awake" && (kind === "message" || kind === "mention")) {
+    // 正在输出时新消息只留在 QQ 未读里,不注入、不打断当前回合
+    if (
+      this.machine.phase === "awake" &&
+      !this.kicking &&
+      !this.deps.agent.state.isStreaming &&
+      (kind === "message" || kind === "mention")
+    ) {
       const envKind = kind === "message" ? "message" : "mention";
       if (!this.deps.injector.hasPendingEnv(envKind)) {
         this.deps.injector.queueEnv(envKind);
-        this.scheduleKickAt(this.clock.simNow() + 1 * MIN, "perception");
+        this.scheduleKickAt(this.clock.simNow(), "perception");
       }
     }
     // 睡眠中:群聊不吵醒;私聊累积达到阈值 → 唤醒决策(可赖床,赖床后继续累积会再次触发)
@@ -478,14 +468,18 @@ export class AgentCore implements CoreCommands, MachineHost {
 
     // 闹钟
     for (const a of this.deps.repo.duePendingAlarms(sim)) {
+      // 入睡归并期间不消费闹钟:归并完成进入 asleep 后,下一个 tick 再正常分发。
+      if (this.machine.phase === "sleep_transition") continue;
       this.deps.repo.markAlarm(a.id, "rang");
       this.events.emit({ type: "alarm_rang", count: this.machine.snoozeCount + 1 });
       this.lastAlarmNote = a.note ?? undefined;
       if (this.machine.phase === "asleep") {
         this.requestWakeDecision("alarm", a.note ?? undefined);
-      } else if (this.machine.phase === "waking") {
-        // 正在赖床犹豫 → 追加响铃烦躁
-        this.deps.injector.queueEnv("alarm_ring", { count: this.machine.snoozeCount + 2, note: a.note ?? undefined });
+      } else {
+        // 清醒/正在赖床犹豫都必须真正收到响铃;不能只改数据库状态。
+        const count = this.machine.phase === "waking" ? this.machine.snoozeCount + 2 : this.machine.snoozeCount + 1;
+        this.deps.injector.queueEnv("alarm_ring", { count, note: a.note ?? undefined });
+        this.scheduleKickAt(sim, "alarm");
       }
     }
   }
@@ -499,7 +493,7 @@ export class AgentCore implements CoreCommands, MachineHost {
     if (delta >= MIN) {
       const steps = Math.floor(delta / MIN);
       this.lastTickSim += steps * MIN;
-      this.applyState({ type: "tick", simDeltaMs: steps * MIN });
+      this.events.emit({ type: "tick", simDeltaMs: steps * MIN });
     }
   }
 

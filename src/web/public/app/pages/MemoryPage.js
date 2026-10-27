@@ -1,7 +1,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "/vendor/vue.esm-browser.prod.js";
+import { onLive } from "../live.js";
 import { api, postJSON } from "../api.js";
 import { notify } from "../store.js";
-import { relativeTime, renderMarkdown } from "../utils.js";
+import { debounce, relativeTime, renderMarkdown, setIfChanged } from "../utils.js";
 
 function fmtBytes(n) {
   if (!Number.isFinite(n)) return "-";
@@ -89,16 +90,17 @@ export const MemoryPage = {
       }
     }
 
-    let timer = null;
+    // 归并完成后由 memory topic 驱动刷新
+    let off = null;
+    const scheduleLoad = debounce(() => {
+      now.value = Date.now();
+      void load(true);
+    }, 800);
     onMounted(() => {
       void load();
-      timer = setInterval(() => {
-        if (document.hidden) return;
-        now.value = Date.now();
-        void load(true);
-      }, 5000);
+      off = onLive("memory", scheduleLoad);
     });
-    onBeforeUnmount(() => clearInterval(timer));
+    onBeforeUnmount(() => off?.());
 
     return {
       data,

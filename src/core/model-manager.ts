@@ -53,7 +53,7 @@ export class ModelManager {
     if (!opts.faux) this.rebuild();
   }
 
-  /** 覆盖层合并进基础配置后的生效配置 */
+  /** 生效配置(覆盖层优先) */
   private effective(): ModelConfig {
     return {
       provider: this.override.provider ?? this.base.provider,
@@ -81,6 +81,19 @@ export class ModelManager {
   get current(): LlmHandles {
     if (this.handles == null) throw new Error("faux 模式下没有真实模型句柄");
     return this.handles;
+  }
+
+  /**
+   * 当前生效模型的实际上下文窗口。
+   * 优先取 pi 目录/自定义 provider 元数据(model.contextWindow),
+   * 只有元数据缺失(自定义端点没填)时才回退到覆盖层或基础配置。
+   * 这样热切换到一个 1M 窗口的模型后,压缩阈值立刻跟着变。
+   */
+  contextWindow(): number {
+    const fromModel = Number((this.handles?.model as { contextWindow?: number } | undefined)?.contextWindow);
+    if (Number.isFinite(fromModel) && fromModel > 0) return fromModel;
+    const cfg = this.effective().contextWindow;
+    return Number.isFinite(cfg) && cfg > 0 ? cfg : 128_000;
   }
 
   /** 供 summarize/judge 注入 API key(pi 请求 options) */
@@ -138,7 +151,7 @@ export class ModelManager {
       provider: e.provider,
       model: e.model,
       baseUrl: e.baseUrl,
-      contextWindow: e.contextWindow,
+      contextWindow: this.contextWindow(),
       maxTokens: e.maxTokens ?? 8192,
       thinkingLevel: this.thinkingLevel(),
       apiKeyEnv: this.base.apiKeyEnv,

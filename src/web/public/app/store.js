@@ -1,19 +1,31 @@
 import { reactive } from "/vendor/vue.esm-browser.prod.js";
 import { api, AuthError, clearToken, getToken, setToken, postJSON } from "./api.js";
+import { onLive, publishLive, startLive, stopLive } from "./live.js";
 
+/**
+ * 全局状态:只放「壳层 + 跨页面共享」的东西。
+ *
+ * 更新模型是事件驱动的:
+ * - 服务端在状态/日志/注入/插件变化时推 topic;
+ * - 只有订阅了该 topic 的页面才会拉取与重渲染;
+ * - 没有任何 setInterval 轮询接口。
+ *
+ * 页面自己的数据尽量留在页面内(见各页 setup),避免 A 页面被 B 的数据变化带着重绘。
+ */
 export const store = reactive({
   auth: { checked: false, ok: false, error: "" },
+  live: { connected: false, error: "", authFailed: false, lastEventAt: 0 },
   status: null,
   statusAt: 0,
   statusError: "",
   legacyBackend: false,
   activity: [],
   activitySeq: 0,
-  activityLive: true,
+  activityLive: false,
   activityError: "",
   injections: [],
   injectionLastId: 0,
-  injectionsLive: true,
+  injectionsLive: false,
   injectionError: "",
   toasts: [],
   theme: "dark",
@@ -51,18 +63,29 @@ export function dismissToast(id) {
   if (i >= 0) store.toasts.splice(i, 1);
 }
 
-let pollStarted = false;
 const busy = { status: false, activity: false, injections: false };
-let timers = [];
 
-/** 状态轮询:只写 store,不碰任何表单草稿 */
+/** 拉一次完整状态(首屏 / 重连补齐 / 手动刷新) */
 export async function fetchStatus() {
   if (busy.status) return store.auth.ok;
   busy.status = true;
   try {
     const s = await api("/api/status");
-    store.status = s;
-    store.legacyBackend = !s.defs || !Array.isArray(s.knownModules);
+    // 首屏/重连补齐:逐字段合并,已有字段内容相同就不动,避免整页闪一下
+    if (!store.status) {
+      store.status = s;
+    } else {
+      const cur = store.status;
+      for (const [key, value] of Object.entries(s)) {
+        if (key === "vars" && value && typeof value === "object") {
+          if (!cur.vars) cur.vars = {};
+          for (const [name, n] of Object.entries(value)) if (cur.vars[name] !== n) cur.vars[name] = n;
+        } else if (JSON.stringify(cur[key]) !== JSON.stringify(value)) {
+          cur[key] = value;
+        }
+      }
+    }
+    store.legacyBackend = !s.defs || !Array.isArray(s.plugins);
     store.statusAt = Date.now();
     store.statusError = "";
     store.auth = { checked: true, ok: true, error: "" };
@@ -70,7 +93,7 @@ export async function fetchStatus() {
   } catch (err) {
     if (err instanceof AuthError) {
       store.auth = { checked: true, ok: false, error: "" };
-      stopPolling();
+      stopLiveFeed();
       return false;
     }
     store.statusError = err.message || "连接中断";
@@ -80,6 +103,42 @@ export async function fetchStatus() {
     return store.auth.ok;
   } finally {
     busy.status = false;
+  }
+}
+
+/** SSE 推送的状态是增量:逐字段合并,避免替换整个对象导致所有读 store.status 的组件重渲染 */
+function applyStatus(data) {
+  if (!data || typeof data !== "object") return;
+  if (!store.status) {
+    store.status = { ...data };
+  } else {
+    const s = store.status;
+    for (const [key, value] of Object.entries(data)) {
+      if (key === "vars" && value && typeof value === "object") {
+        // 逐变量合并:只有真的变了的数字才会触发对应组件更新
+        if (!s.vars) s.vars = {};
+        for (const [name, n] of Object.entries(value)) {
+          if (s.vars[name] !== n) s.vars[name] = n;
+        }
+      } else if (key === "statePulse") {
+        s.statePulse = value;
+      } else if (s[key] !== value) {
+        s[key] = value;
+      }
+    }
+  }
+  store.statusAt = Date.now();
+  store.statusError = "";
+  if (!store.auth.ok) store.auth = { checked: true, ok: true, error: "" };
+}
+
+function applyPlugins(data) {
+  if (!data || !store.status) return;
+  if (Array.isArray(data.plugins) && JSON.stringify(data.plugins) !== JSON.stringify(store.status.plugins)) {
+    store.status.plugins = data.plugins;
+  }
+  if (Array.isArray(data.modules) && JSON.stringify(data.modules) !== JSON.stringify(store.status.modules)) {
+    store.status.modules = data.modules;
   }
 }
 
@@ -107,7 +166,7 @@ export async function fetchActivity() {
   } catch (err) {
     if (err instanceof AuthError) {
       store.auth = { checked: true, ok: false, error: "" };
-      stopPolling();
+      stopLiveFeed();
     } else {
       store.activityError = err.message || "活动日志拉取失败";
     }
@@ -147,7 +206,7 @@ export async function fetchInjections() {
   } catch (err) {
     if (err instanceof AuthError) {
       store.auth = { checked: true, ok: false, error: "" };
-      stopPolling();
+      stopLiveFeed();
     } else {
       store.injectionError = err.message || "注入流水拉取失败";
     }
@@ -156,8 +215,9 @@ export async function fetchInjections() {
   }
 }
 
+/** 只有活动日志页挂载时才会被事件驱动拉取 */
 export function setActivityLive(live) {
-  store.activityLive = live;
+  store.activityLive = Boolean(live);
   if (live) {
     store.activitySeq = 0;
     store.activity = [];
@@ -165,8 +225,9 @@ export function setActivityLive(live) {
   }
 }
 
+/** 只有注入页挂载时才会被事件驱动拉取 */
 export function setInjectionsLive(live) {
-  store.injectionsLive = live;
+  store.injectionsLive = Boolean(live);
   if (live) {
     store.injectionLastId = 0;
     store.injections = [];
@@ -174,45 +235,54 @@ export function setInjectionsLive(live) {
   }
 }
 
-const onVisibility = () => {
-  if (document.hidden) return;
-  void fetchStatus();
-  if (store.activityLive) void fetchActivity();
-  if (store.injectionsLive) void fetchInjections();
-};
+let feedStarted = false;
+let unsubscribers = [];
 
-export function startPolling() {
-  if (pollStarted) return;
-  pollStarted = true;
-  document.addEventListener("visibilitychange", onVisibility);
-  void fetchStatus();
-  if (store.activityLive) void fetchActivity();
-  if (store.injectionsLive) void fetchInjections();
-  timers = [
-    setInterval(() => {
-      if (!document.hidden) void fetchStatus();
-    }, 2000),
-    setInterval(() => {
-      if (!document.hidden) void fetchActivity();
-    }, 2000),
-    setInterval(() => {
-      if (!document.hidden) void fetchInjections();
-    }, 3000),
+export function startLiveFeed() {
+  if (feedStarted) return;
+  feedStarted = true;
+  unsubscribers = [
+    onLive("status", applyStatus),
+    onLive("plugins", applyPlugins),
+    onLive("activity", () => {
+      if (store.activityLive) void fetchActivity();
+    }),
+    onLive("injections", () => {
+      if (store.injectionsLive) void fetchInjections();
+    }),
+    onLive("resync", () => {
+      void fetchStatus();
+      if (store.activityLive) void fetchActivity();
+      if (store.injectionsLive) void fetchInjections();
+    }),
   ];
+  startLive({
+    onState: (patch) => {
+      Object.assign(store.live, patch);
+      if (patch.connected) store.statusError = "";
+    },
+  });
+  document.addEventListener("visibilitychange", onVisible);
 }
 
-export function stopPolling() {
-  if (!pollStarted) return;
-  pollStarted = false;
-  document.removeEventListener("visibilitychange", onVisibility);
-  for (const t of timers) clearInterval(t);
-  timers = [];
+export function stopLiveFeed() {
+  if (!feedStarted) return;
+  feedStarted = false;
+  for (const off of unsubscribers.splice(0)) off();
+  document.removeEventListener("visibilitychange", onVisible);
+  stopLive();
+  store.live = { connected: false, error: "", authFailed: false, lastEventAt: 0 };
+}
+
+function onVisible() {
+  // 回到前台只需补齐一次;后台期间 SSE 通常仍保持连接
+  if (document.hidden) return;
+  publishLive("resync");
 }
 
 export async function bootstrap() {
-  // 保持 checked=false 直到 fetchStatus 真正判定完,避免刷新时先闪一下登录页。
   const ok = await fetchStatus();
-  if (ok) startPolling();
+  if (ok) startLiveFeed();
   return ok;
 }
 
@@ -222,15 +292,16 @@ export async function login(token) {
   if (!ok) {
     setToken("");
     store.auth = { checked: true, ok: false, error: "口令不正确,或后端未开启鉴权。" };
+    stopLiveFeed();
     throw new Error("登录失败");
   }
-  startPolling();
+  startLiveFeed();
 }
 
 export function logout() {
   setToken("");
   clearToken();
-  stopPolling();
+  stopLiveFeed();
   store.auth = { checked: true, ok: false, error: "" };
   store.status = null;
   store.statusAt = 0;

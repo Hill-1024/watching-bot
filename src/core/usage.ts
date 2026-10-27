@@ -61,6 +61,8 @@ export class UsageRecorder {
   constructor(
     private readonly repo: Repo,
     private readonly clock: { simNow(): number },
+    /** 记录成功后通知(面板 Token 页事件驱动刷新) */
+    private readonly onRecord?: (source: UsageSource) => void,
   ) {}
 
   record(source: UsageSource, usage: Partial<Usage> | undefined | null, meta: UsageMeta = {}): void {
@@ -80,6 +82,7 @@ export class UsageRecorder {
       total: u.total,
       costTotal: u.costTotal,
     });
+    this.onRecord?.(source);
   }
 }
 

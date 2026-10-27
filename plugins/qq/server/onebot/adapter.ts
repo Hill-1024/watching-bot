@@ -3,11 +3,11 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { BotModule, ModuleCtx, PerceptionEvent } from "../../bus/types.js";
+import type { PerceptionEvent } from "../../../../src/bus/types.js";
 import { OneBotClient, type ObFriend, type ObGroup, type ObMessageEvent, type ObSegment } from "./client.js";
 import { NapcatStore } from "./store.js";
 
-export interface NapcatModuleConfig {
+export interface OneBotSettings {
   url?: string;
   token?: string;
   /** 自己的 QQ 号(用于识别被@);0 = 启动后用 get_login_info 自取 */
@@ -18,6 +18,14 @@ export interface NapcatModuleConfig {
   /** 发送节流:最小间隔与随机抖动(防风控) */
   sendMinIntervalMs?: number;
   sendJitterMs?: number;
+}
+
+/** 适配器只需要宿主两件事:上报感知、写日志。它不知道插件、状态或提示词。 */
+export interface AdapterHost {
+  emitPerception(e: PerceptionEvent): void;
+  log(msg: string): void;
+  /** 连接状态变化(面板据此推送,而不是轮询) */
+  onConnectionChange?(): void;
 }
 
 /** 下载图片并转 base64(存表情包/多模态查看共用) */
@@ -66,30 +74,29 @@ class SendThrottle {
 }
 
 /**
- * napcat 模块 —— 全项目唯一了解 QQ 的地方。
- * 对核心只暴露:黑箱工具(消息读写)+ 感知事件(message/mention)。
+ * OneBot v11 适配器:NapCat 与 SnowLuma 共用这一份协议/工具/存储实现。
+ *
+ * 运行时差异(NapCat 还是 SnowLuma)只影响 WebUI 端口、登录入口、容器规格,
+ * 不影响这里的一行代码 —— 两套 runtime 暴露的都是同一套 OneBot 11 动作。
+ * 对插件只暴露:黑箱工具(消息读写)+ 感知事件(message/mention)。
  */
-export class NapcatModule implements BotModule {
-  name = "napcat";
-  summary =
-    "QQ(napcat):list_chats 看会话与未读、read_messages 读消息、send_message 回消息(可引用回复)、mark_read 已读、list_friends/list_groups 通讯录、get_recent_at_mentions 谁在@你、get_profile 自己的资料;当群管理:set_group_ban 禁言、set_group_special_title 发定制头衔、get_group_member_info 查身份;贴表情 set_msg_emoji_like;表情包:list_memes/view_meme(多模态看图)/save_meme_from_message 收藏消息里的图/rename_meme 命名/send_meme 发表情包";
-  toolTags: Record<string, string[]> = {
+export class OneBotAdapter {
+  readonly toolTags: Record<string, string[]> = {
     send_message: ["social"],
     read_messages: ["social"],
     send_meme: ["social"],
   };
   tools: AgentTool<any>[] = [];
 
-  private ctx: ModuleCtx | null = null;
+  private host: AdapterHost | null = null;
   private client: OneBotClient | null = null;
   private store: NapcatStore | null = null;
   private throttle: SendThrottle = new SendThrottle(2500, 1500);
   private selfId = 0;
   private memeDir = "data/modules/memes";
 
-  async init(ctx: ModuleCtx): Promise<void> {
-    this.ctx = ctx;
-    const cfg = (ctx.config ?? {}) as NapcatModuleConfig;
+  async connect(cfg: OneBotSettings, host: AdapterHost): Promise<void> {
+    this.host = host;
     const url = cfg.url ?? "ws://127.0.0.1:3001";
     this.selfId = cfg.selfId ?? 0;
     this.memeDir = cfg.memeDir ?? "data/modules/memes";
@@ -100,38 +107,62 @@ export class NapcatModule implements BotModule {
     this.client = new OneBotClient(url, cfg.token ?? "", {
       onEvent: (e) => this.onEvent(e),
       onOpen: () => {
-        void this.onReady().catch((err) => {
-          this.ctx?.log(`onReady 异常: ${String(err)}`);
-        });
+        host.onConnectionChange?.();
+        void this.onReady()
+          .catch((err) => {
+            this.host?.log(`onReady 异常: ${String(err)}`);
+          })
+          .finally(() => host.onConnectionChange?.());
       },
-      log: ctx.log,
+      onClose: () => host.onConnectionChange?.(),
+      log: (msg) => host.log(msg),
     });
     this.client.connect();
     this.buildTools();
   }
 
+  get connected(): boolean {
+    return this.client?.connected ?? false;
+  }
+
+  get selfQq(): number {
+    return this.selfId;
+  }
+
+  /** 轻量登录态探测:WS 通不代表 QQ 已登录,两者要分开呈现 */
+  async loginInfo(): Promise<{ userId: number; nickname: string } | null> {
+    if (!this.client?.connected) return null;
+    try {
+      const info = (await this.client.call("get_login_info")) as { user_id?: number; nickname?: string };
+      if (!info?.user_id) return null;
+      return { userId: info.user_id, nickname: info.nickname ?? "" };
+    } catch {
+      return null;
+    }
+  }
+
   private async onReady(): Promise<void> {
-    const ctx = this.ctx;
-    if (!ctx) return;
+    const host = this.host;
+    if (!host) return;
     try {
       if (this.selfId === 0) {
         const info = (await this.client!.call("get_login_info")) as { user_id: number; nickname: string };
         this.selfId = info.user_id;
-        ctx.log(`登录身份: ${info.nickname}(${info.user_id})`);
+        host.log(`登录身份: ${info.nickname}(${info.user_id})`);
       }
       const friends = (await this.client!.call("get_friend_list")) as unknown as ObFriend[];
       this.store?.cacheFriends(friends ?? []);
       const groups = (await this.client!.call("get_group_list")) as unknown as ObGroup[];
       this.store?.cacheGroups(groups ?? []);
-      if (this.ctx) ctx.log(`通讯录就绪: ${friends?.length ?? 0} 好友, ${groups?.length ?? 0} 群`);
+      host.log(`通讯录就绪: ${friends?.length ?? 0} 好友, ${groups?.length ?? 0} 群`);
     } catch (err) {
-      // 模块可能在校验中途被面板热切换停掉,此时 this.ctx 已置空;用捕获的 ctx 且不再强解引用
-      if (this.ctx) ctx.log(`初始化失败(稍后重连会再试): ${String(err)}`);
+      // 插件可能在校验中途被面板热切换停掉,此时 host 已置空
+      if (this.host) host.log(`初始化失败(稍后重连会再试): ${String(err)}`);
     }
   }
 
   private onEvent(raw: Record<string, unknown>): void {
-    if (!this.ctx) return;
+    if (!this.host) return;
     if (raw.post_type !== "message") return;
     const e = raw as unknown as ObMessageEvent;
     const segments: ObSegment[] = Array.isArray(e.message)
@@ -142,11 +173,11 @@ export class NapcatModule implements BotModule {
     );
     this.store?.insertMessage(e, this.selfId, atMe);
     // 感知事件:被@ → mention;普通消息 → message。风暴聚合由核心负责。
-    this.ctx.emitPerception({
+    this.host.emitPerception({
       kind: atMe ? "mention" : "message",
       intensity: atMe ? 3 : 1,
       source: `${e.message_type}:${e.message_type === "group" ? e.group_id : e.user_id}`,
-    } satisfies PerceptionEvent);
+    });
   }
 
   private buildTools(): void {
@@ -618,10 +649,6 @@ export class NapcatModule implements BotModule {
     this.client = null;
     this.store?.close();
     this.store = null;
-    this.ctx = null;
+    this.host = null;
   }
-}
-
-export function napcatModuleFactory(): BotModule {
-  return new NapcatModule();
 }

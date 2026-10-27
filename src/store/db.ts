@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 export interface DbHandles {
@@ -286,13 +286,46 @@ export class Repo {
 
   /** 只保留最近 keep 条,避免长期挂机把日志表撑爆 */
   pruneActivityLog(keep = 20_000): void {
-    this.h.db
+    this.pruneByCount("activity_log", keep);
+  }
+
+  /**
+   * 面板历史表的保留策略。按条数而不是按天:模拟时间可以飞,真实天数没有稳定含义。
+   * 单条 DELETE 带上限,避免一次清掉几十万行走满事务。
+   */
+  pruneHistory(limits: { state?: number; injections?: number; usage?: number; activity?: number } = {}): {
+    state: number;
+    injections: number;
+    usage: number;
+    activity: number;
+  } {
+    return {
+      state: this.pruneByCount("state_history", limits.state ?? 50_000),
+      injections: this.pruneByCount("injections", limits.injections ?? 20_000),
+      usage: this.pruneByCount("token_usage", limits.usage ?? 50_000),
+      activity: this.pruneByCount("activity_log", limits.activity ?? 20_000),
+    };
+  }
+
+  private pruneByCount(table: string, keep: number): number {
+    if (!Number.isInteger(keep) || keep < 1) return 0;
+    const info = this.h.db
       .prepare(
-        `DELETE FROM activity_log WHERE id <= COALESCE(
-           (SELECT id FROM activity_log ORDER BY id DESC LIMIT 1 OFFSET ?), 0
+        `DELETE FROM ${table} WHERE id <= COALESCE(
+           (SELECT id FROM ${table} ORDER BY id DESC LIMIT 1 OFFSET ?), 0
          )`,
       )
       .run(keep);
+    return info.changes;
+  }
+
+  /** 库文件字节数,面板用来看保留策略有没有生效 */
+  fileBytes(): number {
+    try {
+      return statSync(this.h.path).size;
+    } catch {
+      return 0;
+    }
   }
 
   // ---------- Token 用量 ----------

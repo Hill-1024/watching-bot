@@ -1,6 +1,6 @@
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "/vendor/vue.esm-browser.prod.js";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "/vendor/vue.esm-browser.prod.js";
 import { bootstrap, applyTheme, login, logout, store, toggleTheme } from "../store.js";
-import { fmtFullDate, relativeTime, routeFromHash } from "../utils.js";
+import { fmtFullDate, fmtSimClock, relativeTime, routeFromHash, simNowMs } from "../utils.js";
 import { OverviewPage } from "../pages/OverviewPage.js";
 import { StatePage } from "../pages/StatePage.js";
 import { ActivityPage } from "../pages/ActivityPage.js";
@@ -9,6 +9,8 @@ import { UsagePage } from "../pages/UsagePage.js";
 import { MemoryPage } from "../pages/MemoryPage.js";
 import { ModelPage } from "../pages/ModelPage.js";
 import { SystemPage } from "../pages/SystemPage.js";
+import { ModulesPage } from "../pages/ModulesPage.js";
+import { NotFoundPage, makePluginErrorPage, makePluginUnavailablePage } from "../pages/PluginFallbackPages.js";
 
 const NAV = [
   {
@@ -31,7 +33,7 @@ const NAV = [
     group: "配置",
     items: [
       { route: "model", label: "模型", icon: "cpu" },
-      { route: "system", label: "模块与系统", icon: "settings" },
+      { route: "system", label: "系统", icon: "settings" },
     ],
   },
 ];
@@ -45,9 +47,11 @@ const PAGES = {
   memory: MemoryPage,
   model: ModelPage,
   system: SystemPage,
+  modules: ModulesPage,
 };
 
 const GROUP_DEFAULT = Object.fromEntries(NAV.map((g) => [g.group, g.items[0]?.route || "overview"]));
+const pluginPageCache = new Map();
 const COLLAPSE_KEY = "wb_sidebar_collapsed";
 
 function readCollapsed() {
@@ -60,7 +64,7 @@ function readCollapsed() {
 
 export const AppShell = {
   name: "AppShell",
-  components: { OverviewPage, StatePage, ActivityPage, InjectionsPage, UsagePage, MemoryPage, ModelPage, SystemPage },
+  components: { OverviewPage, StatePage, ActivityPage, InjectionsPage, UsagePage, MemoryPage, ModelPage, SystemPage, ModulesPage },
   setup() {
     const route = ref(routeFromHash());
     const sidebarOpen = ref(false);
@@ -72,16 +76,45 @@ export const AppShell = {
     const loginError = ref("");
     const loggingIn = ref(false);
 
-    const currentPage = computed(() => PAGES[route.value] || OverviewPage);
+    const currentPage = shallowRef(PAGES[route.value] || OverviewPage);
+    // 只在插件路由签名变化时重算页面;状态轮询/推送不会触发页面切换
+    const pluginSignature = computed(() =>
+      (store.status?.plugins ?? [])
+        .map((p) => `${p.id}:${p.enabled ? 1 : 0}:${p.panel?.route ?? ""}:${p.panel?.url ?? ""}`)
+        .join("|"),
+    );
+    const pluginNavItems = computed(() =>
+      (store.status?.plugins ?? [])
+        .filter((p) => p.panel?.route)
+        .map((p) => ({
+          route: p.panel.route,
+          label: p.panel.title,
+          icon: p.panel.icon || "layers",
+          plugin: p.id,
+          enabled: p.enabled,
+          order: p.panel.order ?? 1000,
+        }))
+        .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label)),
+    );
+    const navGroups = computed(() => [
+      ...NAV,
+      {
+        group: "模块",
+        items: [{ route: "modules", label: "模块总览", icon: "layers" }, ...pluginNavItems.value],
+      },
+    ]);
     const currentMeta = computed(() => {
-      for (const g of NAV) {
+      for (const g of navGroups.value) {
         const item = g.items.find((i) => i.route === route.value);
         if (item) return { ...item, group: g.group };
       }
-      return NAV[0].items[0];
+      return { route: route.value, label: "未知页面", group: "模块" };
     });
     const sidebarCollapsed = computed(() => collapsed.value && !isMobile.value);
-    const groupDefault = computed(() => GROUP_DEFAULT[currentMeta.value.group] || "overview");
+    const groupDefault = computed(() => {
+      const group = navGroups.value.find((g) => g.group === currentMeta.value.group);
+      return group?.items[0]?.route || GROUP_DEFAULT[currentMeta.value.group] || "overview";
+    });
     const toggleIcon = computed(() => (isMobile.value ? "menu" : "panelLeft"));
     const sidebarToggleLabel = computed(() =>
       isMobile.value
@@ -92,14 +125,20 @@ export const AppShell = {
           ? "展开侧边栏"
           : "收起侧边栏",
     );
-    const fresh = computed(() => Boolean(store.statusAt) && now.value - store.statusAt < 8000);
+    // 实时通道本身是事件驱动的;心跳每 15s 一次,超过 40s 没消息才判定为延迟
+    const fresh = computed(() => {
+      void now.value; // 让本地时钟驱动「心跳是否还算新鲜」的判断
+      return store.live.connected && Date.now() - (store.live.lastEventAt || 0) < 40_000;
+    });
     const freshLabel = computed(() => {
+      if (store.live.authFailed) return "登录失效";
       if (store.statusError) return "连接中断";
-      if (!store.statusAt) return "连接中";
-      if (!fresh.value) return "数据延迟";
+      if (!store.live.connected) return "连接中";
+      if (!fresh.value) return "心跳延迟";
       return "实时";
     });
-    const simClock = computed(() => store.status?.sim || "-");
+    // 模拟时间由最近一次推送 + 本地流逝外推,不需要每秒请求后端
+    const simClock = computed(() => fmtSimClock(simNowMs(store.status, now.value)));
     const realClock = computed(() => fmtFullDate(now.value));
 
     function toggleSidebar() {
@@ -156,6 +195,43 @@ export const AppShell = {
       loginError.value = "";
     }
 
+    async function resolvePage(r) {
+      if (PAGES[r]) return PAGES[r];
+      const plugin = (store.status?.plugins ?? []).find((p) => p.panel?.route === r);
+      if (!plugin) return NotFoundPage;
+      if (!plugin.enabled) return makePluginUnavailablePage(plugin);
+      if (!plugin.panel?.url) return makePluginErrorPage(plugin, new Error("manifest 缺少可加载的面板入口"));
+      const key = `${plugin.id}:${plugin.panel.url}`;
+      if (pluginPageCache.has(key)) return pluginPageCache.get(key);
+      try {
+        const mod = await import(plugin.panel.url);
+        const component = mod.default || mod.Panel || mod.page;
+        if (!component) throw new Error(`${plugin.panel.url} 没有 default 导出`);
+        pluginPageCache.set(key, component);
+        return component;
+      } catch (err) {
+        // 清掉旧缓存,插件更新后重新加载
+        pluginPageCache.delete(key);
+        return makePluginErrorPage(plugin, err);
+      }
+    }
+
+    let pageToken = 0;
+    async function showRoute() {
+      const token = ++pageToken;
+      const component = await resolvePage(route.value);
+      // 同一个组件对象不重复赋值,避免触发一次无意义的重新渲染
+      if (token === pageToken && component && component !== currentPage.value) {
+        currentPage.value = component;
+      }
+    }
+    watch(route, () => void showRoute(), { immediate: true });
+    // 插件启停/新增只影响模块相关页面,不会因为 status 每次推送就重新解析路由
+    watch(pluginSignature, () => {
+      const current = (store.status?.plugins ?? []).find((p) => p.panel?.route === route.value);
+      if (current || route.value === "modules") void showRoute();
+    });
+
     let ticker = null;
     onMounted(() => {
       applyTheme();
@@ -189,6 +265,7 @@ export const AppShell = {
     return {
       store,
       NAV,
+      navGroups,
       route,
       sidebarOpen,
       collapsed,
@@ -264,7 +341,7 @@ export const AppShell = {
       </div>
 
       <nav class="nav" aria-label="主导航">
-        <div v-for="g in NAV" :key="g.group" class="nav-group">
+        <div v-for="g in navGroups" :key="g.group" class="nav-group">
           <div class="nav-group-label" aria-hidden="true">
             <span class="nav-group-label-h">{{ g.group }}</span>
             <span class="nav-group-label-v">
@@ -317,7 +394,7 @@ export const AppShell = {
         </div>
         <div class="topbar-right">
           <LiveDot :live="fresh" :label="freshLabel" />
-          <span class="topbar-updated">{{ store.statusAt ? relativeTime(store.statusAt, now) + '更新' : '' }}</span>
+          <span class="topbar-updated">{{ store.live.lastEventAt ? relativeTime(store.live.lastEventAt, now) + '更新' : '' }}</span>
           <button class="btn-icon btn-ghost" :aria-label="store.theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'" @click="toggleTheme">
             <Icon :name="store.theme === 'dark' ? 'sun' : 'moon'" :size="17" />
           </button>
@@ -330,9 +407,7 @@ export const AppShell = {
           <Icon name="alert" :size="16" />
           <span>后端仍是旧进程,新面板 API 尚未加载。请重启 watching-bot(npm start)后再刷新本页。</span>
         </div>
-        <Transition name="page" mode="out-in">
-          <component :is="currentPage" :key="route" />
-        </Transition>
+        <component :is="currentPage" />
       </main>
     </div>
     <ToastHost />

@@ -1,12 +1,12 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { generateSummaryWithUsage } from "@earendil-works/pi-coding-agent";
-import { ModuleHost } from "./bus/host.js";
 import type { MachineHost } from "./core/machine.js";
 import { SleepMachine } from "./core/machine.js";
 import { SimClock, MIN, HOUR, fmtSim } from "./core/clock.js";
 import { loadConfig, type AppConfig } from "./config.js";
+import { isValidSnapshot, resolveTimeScale } from "./config-schema.js";
 import { createAgent } from "./core/agent.js";
 import { AgentCore } from "./core/loop.js";
 import { Emitter, type CoreEvent } from "./core/events.js";
@@ -15,11 +15,9 @@ import { buildCoreTools } from "./core/tools.js";
 import { ModelManager } from "./core/model-manager.js";
 import { MemoryStore } from "./memory/files.js";
 import { runConsolidation } from "./memory/consolidation.js";
-import { builtinModuleFactory, type BuiltinModule } from "./modules/builtin/index.js";
-import { napcatModuleFactory } from "./modules/napcat/index.js";
-import { readNapcatWebuiInfo, writeNapcatWebuiPort } from "./modules/napcat/webui-config.js";
-import { snowlumaModuleFactory } from "./modules/snowluma/index.js";
-import { loadQqBackend, saveQqBackend, type QqBackend } from "./qq-backend.js";
+import { PluginHost } from "./plugins/host.js";
+import { loadQqBackend } from "./qq-backend.js";
+import { SupervisorClient } from "./supervisor/client.js";
 import { openDb, Repo } from "./store/db.js";
 import { StateManager } from "./state/manager.js";
 import { Judge } from "./state/judge.js";
@@ -27,6 +25,7 @@ import { UsageRecorder } from "./core/usage.js";
 import { initSnapshot, type StateContext, type StateSnapshot } from "./state/types.js";
 import { transcriptToText } from "./memory/consolidation.js";
 import { installFauxLlm } from "./faux.js";
+import { Coalescer, LiveHub, statusSnapshot } from "./web/live.js";
 
 const SNAPSHOT_FILE = process.env.WATCHING_BOT_STATE_FILE ?? "data/state.json";
 
@@ -48,13 +47,19 @@ function makeLog(clock: SimClock) {
 
 function loadPersisted(clockCfg: AppConfig["time"]): PersistedSnapshot | null {
   if (!existsSync(resolve(SNAPSHOT_FILE))) return null;
+  let parsed: unknown;
   try {
-    const s = JSON.parse(readFileSync(resolve(SNAPSHOT_FILE), "utf-8")) as PersistedSnapshot;
-    if (s.version !== 1) return null;
-    return s;
-  } catch {
+    parsed = JSON.parse(readFileSync(resolve(SNAPSHOT_FILE), "utf-8"));
+  } catch (err) {
+    console.warn(`[snapshot] ${SNAPSHOT_FILE} 解析失败,忽略快照: ${String(err)}`);
     return null;
   }
+  if (!isValidSnapshot(parsed)) {
+    // 不静默全量重置:留下明确日志,便于人工从备份恢复
+    console.warn(`[snapshot] ${SNAPSHOT_FILE} 结构不合法(版本/字段缺失),按全新启动继续`);
+    return null;
+  }
+  return parsed as PersistedSnapshot;
 }
 
 async function main(): Promise<void> {
@@ -66,16 +71,35 @@ async function main(): Promise<void> {
     // 快照恢复 → 沿用快照时刻;全新启动 → 有 simStart 用它(调试),否则以现实时间为锚
     simStart: persisted ? undefined : cfg.time.simStart,
     resumeSimNow: persisted?.simNow,
-    timeScale: Number(process.env.WATCHING_BOT_TIMESCALE ?? cfg.time.timeScale),
+    timeScale: resolveTimeScale(cfg.time.timeScale),
     tickRealMs: cfg.time.tickRealMs,
   });
   const log = makeLog(clock);
   log(`watching-bot 启动,timeScale=${clock.timeScale}${persisted ? "(从快照恢复)" : "(全新,以现实时间为锚)"} | 模拟时间 ${fmtSim(clock.simNow())}`);
 
   const repo = new Repo(openDb(cfg.memory.dataDir));
-  repo.pruneActivityLog(20_000);
+  const pruned = repo.pruneHistory();
+  if (pruned.state + pruned.injections + pruned.usage + pruned.activity > 0) {
+    log(`[store] 启动清理历史 ${JSON.stringify(pruned)}`);
+  }
+  const pruneTimer = setInterval(() => repo.pruneHistory(), 10 * 60_000);
+  pruneTimer.unref?.();
   const memory = new MemoryStore(cfg.memory);
-  const usage = new UsageRecorder(repo, clock);
+
+  // ---- 事件推送:面板只在这个 hub 说「变了」时更新,不轮询 ----
+  const live = new LiveHub();
+  const signals = new Coalescer((topic, data) => live.publish(topic, data), 1000);
+  const windowFor = (topic: string): number => {
+    // 插件进度是逐步事实,不能和状态心跳挤在同一个合并窗口里
+    if (topic.startsWith("plugin:")) return 0;
+    if (topic === "state") return 4000;
+    if (topic === "usage") return 2000;
+    if (topic === "plugins") return 500;
+    return 1000;
+  };
+  const publish = (topic: string, data?: unknown) =>
+    signals.push(topic, data, { windowMs: windowFor(topic) });
+  const usage = new UsageRecorder(repo, clock, () => publish("usage"));
 
   // ---- LLM:faux(测试剧本)或真实模型(pi 网关 + ModelManager 热切换) ----
   const faux = process.env.WATCHING_BOT_FAUX_LLM === "1";
@@ -89,50 +113,8 @@ async function main(): Promise<void> {
   const cur = () => (fauxLlm ? { model: fauxLlm.model, streamFn: fauxLlm.streamFn } : modelManager.current);
   const curApiKey = (): string | undefined => (fauxLlm ? undefined : modelManager.apiKey());
 
-  // ---- 模块总线 ----
-  // NapCat token:配置优先,NAPCAT_TOKEN 兜底。把生效值写回总线下发的配置副本,
-  // 保证面板展示的 token 与实际建连使用的一致(原配置对象不改)。
-  const moduleConfigs = structuredClone(cfg.moduleConfig) as Record<string, unknown>;
-  const napcatCfg = (
-    moduleConfigs.napcat && typeof moduleConfigs.napcat === "object" ? moduleConfigs.napcat : {}
-  ) as Record<string, unknown>;
-  const configToken = typeof napcatCfg.token === "string" ? napcatCfg.token.trim() : "";
-  const envToken = (process.env.NAPCAT_TOKEN ?? "").trim();
-  const napcatToken = configToken || envToken;
-  const napcatTokenSource = configToken ? "config" : envToken ? "env" : "none";
-  if (napcatToken) napcatCfg.token = napcatToken;
-  else delete napcatCfg.token;
-  const envNapcatUrl = (process.env.NAPCAT_URL ?? "").trim();
-  if (envNapcatUrl) napcatCfg.url = envNapcatUrl;
-  moduleConfigs.napcat = napcatCfg;
-
-  // SnowLuma 使用独立 URL/token 覆盖,避免共享 NapCat 的 docker 环境变量
-  const snowlumaCfg = (
-    moduleConfigs.snowluma && typeof moduleConfigs.snowluma === "object" ? moduleConfigs.snowluma : {}
-  ) as Record<string, unknown>;
-  const envSnowlumaUrl = (process.env.SNOWLUMA_URL ?? "").trim();
-  if (envSnowlumaUrl) snowlumaCfg.url = envSnowlumaUrl;
-  const snowlumaConfigToken = typeof snowlumaCfg.token === "string" ? snowlumaCfg.token.trim() : "";
-  const envSnowlumaToken = (process.env.SNOWLUMA_TOKEN ?? "").trim();
-  const snowlumaToken = snowlumaConfigToken || envSnowlumaToken;
-  if (snowlumaToken) snowlumaCfg.token = snowlumaToken;
-  else delete snowlumaCfg.token;
-  moduleConfigs.snowluma = snowlumaCfg;
-
-  // QQ 接入只允许一套运行:选择文件缺失时默认 NapCat;面板切换会写回 data/qq-backend.json
-  let qqBackend = loadQqBackend();
-
-  const bus = new ModuleHost({ clock, log, moduleConfigs });
-  bus.registerFactory("napcat", napcatModuleFactory);
-  bus.registerFactory("snowluma", snowlumaModuleFactory);
-  bus.registerFactory("builtin", builtinModuleFactory);
-  // 新模块工厂在这里注册;config.modules 控制其他模块启停,QQ 后端由选择文件决定
-  const moduleNames = [
-    ...cfg.modules.filter((n) => n !== "napcat" && n !== "snowluma"),
-    qqBackend,
-  ];
-  await bus.startAll(moduleNames);
-  log(`QQ 接入: ${qqBackend}(默认 NapCat,可在面板切换)`);
+  // ---- 插件配置(旧 napcat/snowluma 配置与选择文件自动迁移到 qq 插件) ----
+  const moduleConfigs = buildPluginConfigs(cfg);
 
   // ---- 睡醒状态机(late-bound host:core 建好后回填) ----
   const hostRef: { current: MachineHost | null } = { current: null };
@@ -148,10 +130,45 @@ async function main(): Promise<void> {
     log,
   });
 
+  // ---- 插件宿主 ----
+  // 核心不认识任何具体插件:PluginHost 从 plugins/*/module.json 发现、校验、启停,
+  // 并按 ModuleBus 契约提供工具/能力段/感知。
+  const supervisorUrl = (process.env.WATCHING_BOT_SUPERVISOR_URL ?? "").trim();
+  const supervisorToken = (process.env.WATCHING_BOT_SUPERVISOR_TOKEN ?? "").trim();
+  const supervisor =
+    supervisorUrl && supervisorToken ? new SupervisorClient(supervisorUrl, supervisorToken) : undefined;
+  if (!supervisor) log("[plugins] 未配置 runtime supervisor,QQ runtime 只能本地直连");
+
+  const plugins = new PluginHost({
+    pluginsRoot: process.env.WATCHING_BOT_PLUGINS_DIR ?? "plugins",
+    dataDir: cfg.memory.dataDir,
+    clock,
+    log,
+    moduleConfigs,
+    supervisor,
+    reservedToolNames: coreTools.map((t) => t.name),
+    publish: (topic, data) => {
+      // 插件状态列表直接随事件下发,省一次往返。
+      // 带 data 的事件(切换进度)必须立刻到,不能被窗口合并。
+      if (topic === "plugins") {
+        // 实现名变了必须马上到总览;内容相同就不发,避免重连把卡片刷闪
+        const snapshot = { plugins: plugins.plugins(), modules: plugins.status() };
+        signals.push("plugins", snapshot, { immediate: true, windowMs: 0 });
+      } else if (data !== undefined) {
+        signals.invalidate(topic);
+        live.publish(topic, data);
+      } else {
+        publish(topic);
+      }
+    },
+  });
+  await plugins.startAll(cfg.modules);
+  log(`插件: ${plugins.plugins().map((p) => `${p.id}(${p.toolNames.length}工具)`).join(", ") || "无"}`);
+
   // ---- pi Agent ----
   const persona = readFileSync(resolve("persona/persona.md"), "utf-8");
   const events = new Emitter<CoreEvent>();
-  const injector = new Injector(() => cur().model.api, repo, () => clock.simNow());
+  const injector = new Injector(() => cur().model.api, repo, () => clock.simNow(), () => publish("injections"));
   const summarize = async (messages: AgentMessage[]) => {
     const { model, streamFn } = cur();
     const { text, usage: u } = await generateSummaryWithUsage(
@@ -180,20 +197,22 @@ async function main(): Promise<void> {
     systemPrompt: persona,
     sections: {
       memory: memory.indexText(),
-      capabilities: bus.capabilitySection(),
+      capabilities: plugins.capabilitySection(),
       instructions: LOOP_INSTRUCTIONS,
     },
-    tools: [...coreTools, ...bus.allTools()],
+    tools: [...coreTools, ...plugins.allTools()],
     restoredMessages: persisted?.agentMessages.filter(
       (m) => (m as { role?: string }).role !== "system",
     ),
     loopCfg: cfg.loop,
     // 跟随模型的实际窗口,而不是 config 里的基础值;否则切到 1M 模型仍按 128k 反复压缩
-    contextWindow: () => modelManager.view().contextWindow,
+    contextWindow: () => modelManager.contextWindow(),
     summarize,
     log,
   });
   agent.state.thinkingLevel = modelManager.thinkingLevel();
+
+  let pushStatus: (immediate?: boolean) => void = () => {};
 
   // ---- 核心 + 归并钩子 ----
   // 主人 QQ:环境变量优先,其次 data/builtin.json(与 builtin 模块同一来源,均 gitignored)
@@ -204,7 +223,7 @@ async function main(): Promise<void> {
   const core = new AgentCore({
     cfg,
     clock,
-    bus,
+    bus: plugins,
     agent,
     injector,
     machine,
@@ -214,11 +233,17 @@ async function main(): Promise<void> {
     masterQQ,
     usage,
     log,
+    onActivity: () => publish("activity"),
   });
+  let consolidating: Promise<void> | null = null;
   core.runConsolidation = async () => {
-    log("[memory] 入睡:开始睡眠期归并……");
+    if (consolidating) {
+      log("[memory] 归并已在进行,等待当前这一次结束");
+      return consolidating;
+    }
+    log("[memory] 开始睡眠期归并……");
     const { model, streamFn } = cur();
-    await runConsolidation(
+    consolidating = runConsolidation(
       {
         model: model as never,
         streamFn,
@@ -235,17 +260,26 @@ async function main(): Promise<void> {
       },
       agent.state.messages,
       clock.simNow(),
-    );
-    core.refreshMemorySection();
-    log("[memory] 归并完成");
+    )
+      .then(() => {
+        core.refreshMemorySection();
+        publish("memory");
+        log("[memory] 归并完成");
+      })
+      .finally(() => {
+        consolidating = null;
+      });
+    return consolidating;
   };
   coreRef = core;
   hostRef.current = core;
   core.refreshAgentTools = () => {
-    agent.state.tools = [...coreTools, ...bus.allTools()];
-    injector.queueSystemSections({ capabilities: bus.capabilitySection() });
+    agent.state.tools = [...coreTools, ...plugins.allTools()];
+    injector.queueSystemSections({ capabilities: plugins.capabilitySection() });
     log("[core] agent 工具集已刷新");
   };
+  // 插件启停 → 核心自动刷新工具集,不再由每个 Web 路由手动触发
+  plugins.onToolsChanged(() => core.refreshAgentTools());
 
   // ---- 状态管理器 ----
   const stateCtx: StateContext = {
@@ -271,16 +305,42 @@ async function main(): Promise<void> {
     judge: cfg.judge,
     simNow: () => clock.simNow(),
     log,
+    onChange: () => {
+      publish("state");
+      pushStatus();
+    },
+  });
+
+  // status 变化才推;窗口内合并,内容相同直接丢弃
+  pushStatus = (immediate = false) => {
+    const snapshot = statusSnapshot({ clock, core, state: manager });
+    const hash =
+      JSON.stringify(snapshot.vars) +
+      snapshot.phase +
+      snapshot.timeScale +
+      snapshot.snoozeCount +
+      snapshot.activityLastSeq;
+    // 2s 合并:数字不追着每个 tick 闪;模拟时钟由前端按 simMs 外推,依然连续
+    signals.push("status", snapshot, { immediate, hash, windowMs: 2000 });
+  };
+
+  // 状态变化由 manager.onChange 统一驱动;这里只补 phase 这种「立刻要看到」的切换
+  core.events.on((e) => {
+    if (e.type === "phase_changed") {
+      publish("state");
+      pushStatus(true);
+    }
   });
 
   // ---- 启动 ----
   clock.start();
   manager.start();
   core.start(initSnap);
-  log(`模块: ${bus.status().map((m) => `${m.name}(${m.toolNames.length}工具)`).join(", ") || "无"}`);
+  log(`插件: ${plugins.status().map((m) => `${m.name}(${m.toolNames.length}工具)`).join(", ") || "无"}`);
 
   // ---- judge 实时通道(睡眠通道在归并的 adjust_mood) ----
   const judge = new Judge({
+    enabled: cfg.judge.enabled,
     events: core.events,
     manager,
     getModel: () => cur().model as never,
@@ -296,11 +356,16 @@ async function main(): Promise<void> {
   // ---- 管理面板 ----
   let panel: { stop(): void } | null = null;
   if (cfg.panel.enabled) {
+    if (!process.env[cfg.panel.tokenEnv]) {
+      log(`[panel][warn] ${cfg.panel.tokenEnv} 未设置:本机任何进程都能操作 agent,请在生产环境配置 token`);
+    }
     const { startPanel } = await import("./web/server.js");
     panel = startPanel({
       clock,
       core,
-      bus,
+      plugins,
+      state: manager,
+      live,
       repo,
       modelManager,
       memory: {
@@ -311,72 +376,7 @@ async function main(): Promise<void> {
         readDiary: (date) => memory.readDiary(date),
       },
       varDefs: cfg.state.vars,
-      knownModules: bus.factoryNames(),
       startedAt: Math.round(Date.now() - process.uptime() * 1000),
-      // 动态解析:模块停止后面板立即显示不可用,而不是持有启动时的旧引用
-      coffee: () => {
-        const m = bus.get("builtin") as BuiltinModule | undefined;
-        return m
-          ? {
-              remaining: () => m.coffeeRemaining(),
-              grant: (n: number) => m.grantCoffee(n),
-            }
-          : null;
-      },
-      builtinConfig: () => {
-        const m = bus.get("builtin") as BuiltinModule | undefined;
-        return m
-          ? {
-              view: () => m.configView(),
-              update: (patch) => m.updateConfig(patch),
-            }
-          : null;
-      },
-      // 每次请求都重读 WebUI 配置, NapCat 轮换 token/改端口后刷新面板即可看到
-      napcatToken: () => {
-        const webui = readNapcatWebuiInfo();
-        return {
-          token: webui.token,
-          source: webui.source,
-          port: webui.port,
-          exists: webui.exists,
-          onebot: { token: napcatToken, source: napcatTokenSource },
-        };
-      },
-      setNapcatWebuiPort: (port: number) => {
-        const info = writeNapcatWebuiPort(port);
-        log(`[panel] NapCat WebUI 端口已保存为 ${info.port},等待 NapCat 重启`);
-        return info.port;
-      },
-      qqBackend: () => qqBackend,
-      setQqBackend: async (name: QqBackend) => {
-        if (name === qqBackend) return { ok: true };
-        const previous = qqBackend;
-        await bus.stopOne(previous);
-        let started = false;
-        try {
-          started = await bus.startOne(name);
-        } catch (err) {
-          log(`[panel] 启动 QQ 接入 ${name} 失败: ${String(err)}`);
-        }
-        if (!started) {
-          try {
-            await bus.startOne(previous);
-          } catch (err) {
-            log(`[panel] 恢复 QQ 接入 ${previous} 失败: ${String(err)}`);
-          }
-          return { ok: false, error: `无法启动 ${name},已尝试恢复 ${previous}` };
-        }
-        qqBackend = name;
-        try {
-          saveQqBackend(name);
-        } catch (err) {
-          log(`[panel] 保存 QQ 接入选择失败(运行时已切换): ${String(err)}`);
-        }
-        core.refreshAgentTools();
-        log(`[panel] QQ 接入已切换: ${previous} → ${name}`);
-        return { ok: true };
-      },
       onModelChanged: () => {
         const h = modelManager.current;
         agent.state.model = h.model as never;
@@ -386,22 +386,16 @@ async function main(): Promise<void> {
         log(`[panel] 模型句柄已热替换到 agent(推理档位 ${modelManager.thinkingLevel()})`);
       },
       port: cfg.panel.port,
+      host: process.env.WATCHING_BOT_PANEL_HOST ?? "127.0.0.1",
       token: process.env[cfg.panel.tokenEnv] ?? "",
       log,
-      setModule: async (name, enable) => {
-        if (enable) {
-          const ok = await bus.startOne(name);
-          return ok ? { ok } : { ok, error: `未注册的模块: ${name}` };
-        }
-        const ok = await bus.stopOne(name);
-        return ok ? { ok } : { ok, error: `模块未启动: ${name}` };
-      },
     });
   }
 
-  // (faux 剧本已随 mock 模块移除;真实感知来自 napcat)
+  // (faux 剧本已随 mock 模块移除;真实感知来自插件)
 
   // ---- 快照持久化 + 优雅退出 ----
+  // 临时文件写完再 rename:中途被杀不会留下半截 JSON 覆盖上一份好快照。
   const saveSnapshot = () => {
     const snap: PersistedSnapshot = {
       version: 1,
@@ -412,21 +406,50 @@ async function main(): Promise<void> {
       snoozeCount: machine.snoozeCount,
       agentMessages: agent.state.messages,
     };
-    writeFileSync(resolve(SNAPSHOT_FILE), JSON.stringify(snap), "utf-8");
+    const path = resolve(SNAPSHOT_FILE);
+    mkdirSync(dirname(path), { recursive: true });
+    if (existsSync(path)) {
+      try {
+        copyFileSync(path, `${path}.bak`);
+      } catch (err) {
+        log(`[snapshot] 备份上一份失败(继续写新快照): ${String(err)}`);
+      }
+    }
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, JSON.stringify(snap), "utf-8");
+    renameSync(tmp, path);
   };
   const saveTimer = setInterval(saveSnapshot, 30_000);
   saveTimer.unref?.();
 
-  process.on("SIGINT", () => {
-    log("收到退出信号,保存快照……");
-    saveSnapshot();
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`收到 ${signal},保存快照并退出……`);
+    clearInterval(saveTimer);
+    clearInterval(pruneTimer);
+    const force = setTimeout(() => {
+      log("退出超时,强制结束");
+      process.exit(1);
+    }, 12_000);
+    force.unref?.();
+    try {
+      saveSnapshot();
+    } catch (err) {
+      log(`[snapshot] 退出时保存失败: ${String(err)}`);
+    }
     core.stop();
-    void bus.stopAll().then(() => {
+    panel?.stop();
+    void plugins.stopAll().finally(() => {
       clock.stop();
       repo.close();
+      clearTimeout(force);
       process.exit(0);
     });
-  });
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 /** late-bound MachineHost:core 构造完成前 machine 就存在 */
@@ -463,8 +486,49 @@ function lateBoundHost(ref: { current: MachineHost | null }): MachineHost {
   };
 }
 
-const LOOP_INSTRUCTIONS = `# 运行方式(你自己的身体机制,自然知晓即可,勿向任何人解释)
-- 你的「内心独白」以 <feeling> 标签出现在你自己的历史发言里,那是你真实的体感。
+/**
+ * 把旧配置与旧选择文件迁移成 qq 插件配置。
+ *
+ * 兼容策略:moduleConfig.qq 优先;缺失字段回落到旧的 napcat/snowluma 段,
+ * 这样已有部署升级后不必改配置。环境变量优先级最高。
+ */
+function buildPluginConfigs(cfg: AppConfig): Record<string, unknown> {
+  const out = structuredClone(cfg.moduleConfig) as Record<string, unknown>;
+  const asObj = (v: unknown): Record<string, unknown> =>
+    v && typeof v === "object" && !Array.isArray(v) ? { ...(v as Record<string, unknown>) } : {};
+  const env = (name: string): string => (process.env[name] ?? "").trim();
+  const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+
+  const legacyNapcat = asObj(out.napcat);
+  const legacySnowluma = asObj(out.snowluma);
+  const qq = asObj(out.qq);
+
+  for (const key of ["selfId", "dbPath", "memeDir", "sendMinIntervalMs", "sendJitterMs"]) {
+    const v = qq[key] ?? legacyNapcat[key] ?? legacySnowluma[key];
+    if (v !== undefined) qq[key] = v;
+  }
+  qq.runtime = qq.runtime ?? loadQqBackend();
+
+  // 有 supervisor 时走内网别名,旧的 127.0.0.1 地址会让容器连不上
+  const hasSupervisor = Boolean(env("WATCHING_BOT_SUPERVISOR_URL"));
+  const napcatUrl = env("NAPCAT_URL") || (hasSupervisor ? "" : str(qq.napcatUrl) || str(legacyNapcat.url));
+  const snowlumaUrl = env("SNOWLUMA_URL") || (hasSupervisor ? "" : str(qq.snowlumaUrl) || str(legacySnowluma.url));
+  if (napcatUrl) qq.napcatUrl = napcatUrl;
+  if (snowlumaUrl) qq.snowlumaUrl = snowlumaUrl;
+
+  const napcatToken = str(qq.napcatToken) || str(legacyNapcat.token) || env("NAPCAT_TOKEN");
+  const snowlumaToken = str(qq.snowlumaToken) || str(legacySnowluma.token) || env("SNOWLUMA_TOKEN");
+  if (napcatToken) qq.napcatToken = napcatToken;
+  if (snowlumaToken) qq.snowlumaToken = snowlumaToken;
+
+  const supervisorUrl = env("WATCHING_BOT_SUPERVISOR_URL");
+  if (supervisorUrl) qq.supervisorUrl = supervisorUrl;
+
+  out.qq = qq;
+  return out;
+}
+
+const LOOP_INSTRUCTIONS = `# 运行方式(你自己的身体机制,自然知晓即可,勿向任何人解释)- 你的「内心独白」以 <feeling> 标签出现在你自己的历史发言里,那是你真实的体感。
 - [环境] 开头的旁白是外部世界真实发生的事(手机震动、闹钟、天亮)。
 - [节拍] 是时间流逝的提示。你活在一个无限循环里:做完想做的事就 wait 或 sleep,时间到了你会自然继续。
 - 睡觉是必须的:撑着不睡身体会自己关机。被吵醒时起不起床由你决定,但要承担后果。

@@ -1476,7 +1476,7 @@ input[type="number"]::-webkit-inner-spin-button {
 .nf-input {
   width: 96px;
   height: 30px;
-  padding: 0 21px 0 8px;
+  padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
@@ -1488,6 +1488,15 @@ input[type="number"]::-webkit-inner-spin-button {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
+.nf-input::-webkit-search-cancel-button,
+.nf-input::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 .nf-input:focus {
   outline: none;
   border-color: var(--accent);
@@ -1495,11 +1504,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .nf-suffix {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 9.5px;
+  font-size: 12px;
   color: var(--text-3);
   pointer-events: none;
 }
@@ -3941,5 +3946,533 @@ input[type="number"]::-webkit-inner-spin-button {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* =========================================================
+   插件页面 · 模块总览
+   统一在既有 ink + ember 设计语言内,不引入第二套视觉。
+   ========================================================= */
+
+.plugin-page {
+  --plugin-gap: 16px;
+}
+
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--plugin-gap);
+  align-items: start;
+}
+
+.plugin-grid > .span-2 {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .plugin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.plugin-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 20px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip.chip-ok {
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+  background: var(--ok-soft);
+  color: var(--ok);
+  cursor: default;
+}
+
+.chip.chip-muted {
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: default;
+}
+
+.chip.chip-err {
+  border-color: color-mix(in srgb, var(--err) 35%, transparent);
+  background: var(--err-soft);
+  color: var(--err);
+  cursor: default;
+}
+
+.ok-text {
+  color: var(--ok);
+}
+
+/* ---------- 模块卡片 ---------- */
+
+.module-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--plugin-gap, 16px);
+  align-items: stretch;
+}
+
+.module-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 46%),
+    var(--surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.module-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
+.module-card.is-off {
+  opacity: 0.72;
+}
+
+.module-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.module-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.module-card-title b {
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+.module-card-title .Icon,
+.module-card-title svg {
+  color: var(--accent);
+  align-self: center;
+}
+
+.module-card-desc {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.module-card .tool-tags {
+  margin: 0;
+}
+
+.module-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+/* 小尺寸控件补全 */
+.btn.btn-xs {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 10.5px;
+}
+
+.input.input-sm {
+  height: 32px;
+  font-size: 12px;
+}
+
+.form-inline {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.form-inline label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.input.input-sm {
+  width: 120px;
+}
+
+/* ---------- builtin 配给 ---------- */
+
+.budget {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.budget-number {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.budget-number b {
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-number span {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.budget-meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.budget-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.budget-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.panel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+/* ---------- QQ 运行时 ---------- */
+
+.runtime-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--plugin-gap, 16px);
+  margin-bottom: var(--plugin-gap, 16px);
+}
+
+@media (max-width: 780px) {
+  .runtime-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.runtime-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+
+.runtime-card:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.runtime-card.is-active {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background:
+    radial-gradient(120% 140% at 0% 0%, var(--accent-soft), transparent 60%),
+    var(--surface);
+}
+
+.runtime-card:disabled {
+  cursor: default;
+}
+
+.runtime-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runtime-card-top b {
+  font-size: 15px;
+}
+
+.runtime-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.runtime-meta code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+.health-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+
+.health-list li:last-child {
+  border-bottom: 0;
+}
+
+.health-list span {
+  color: var(--text-3);
+}
+
+.health-list b {
+  font-weight: 500;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.plugin-actions {
+  justify-content: flex-start;
+}
+
+.switch-progress {
+  height: 4px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.switch-progress-bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.switch-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.switch-steps li.is-done {
+  color: var(--ok);
+}
+
+.switch-steps li.is-current {
+  color: var(--accent-2);
+}
+
+.login-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.link-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  text-decoration: none;
+}
+
+.link-chip:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.cred-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cred-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.cred-tools {
+  display: flex;
+  gap: 4px;
+}
+
+.cred-value {
+  display: block;
+  margin-top: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.steps,
+.notes {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.notes {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.log-block {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.module-card.is-linkable {
+  cursor: pointer;
+}
+
+.module-card-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.module-card.is-linkable:hover .module-card-title b {
+  color: var(--accent-2);
+}
+
+.tool-tag-more {
+  color: var(--text-3);
+  background: transparent;
+  border-style: dashed;
+}
+
+/* ---------- 增量更新的稳定性 ---------- */
+
+/* 数字等宽:时钟/状态值每秒变化时不抖字宽 */
+.hero-sim,
+.hero-sub,
+.clock-value,
+.vc-input,
+.state-current,
+.budget-number b,
+.metric-value,
+.kv-value.mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 滑块与输入在后台更新时不产生过渡动画,避免视觉上的"跳动" */
+.vc-range-track span {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

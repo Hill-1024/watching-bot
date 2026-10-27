@@ -3,6 +3,7 @@ import type { FeelingKind } from "./copy.js";
 
 /** 核心对外(状态管理器/面板)暴露的事件流 —— 只描述 agent 本体,无任何模块概念 */
 export type CoreEvent =
+  | { type: "tick"; simDeltaMs: number }
   | { type: "turn_end"; toolNames: string[]; textLen: number }
   | { type: "tool_call"; name: string; tags: string[] }
   | { type: "perception"; kind: string; intensity: number }

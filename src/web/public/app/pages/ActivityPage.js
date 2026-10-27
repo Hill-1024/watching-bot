@@ -1,6 +1,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "/vendor/vue.esm-browser.prod.js";
+import { onLive } from "../live.js";
 import { api } from "../api.js";
-import { setActivityLive, store } from "../store.js";
+import { fetchActivity, setActivityLive, store } from "../store.js";
 import { KIND_META } from "../meta.js";
 import { debounce, fmtDateTime, fmtNum, relativeTime } from "../utils.js";
 
@@ -122,12 +123,18 @@ export const ActivityPage = {
     }
 
     let ticker = null;
+    let offLive = null;
     onMounted(() => {
-      ticker = setInterval(() => (now.value = Date.now()), 2000);
+      ticker = setInterval(() => (now.value = Date.now()), 3000);
+      // 只有本页挂载时才会响应 activity 事件;数据拉取也只在此时发生
+      offLive = onLive("activity", () => void fetchActivity());
       if (tab.value === "history") void loadHistory();
       else nextTick(scrollToBottom);
     });
-    onBeforeUnmount(() => clearInterval(ticker));
+    onBeforeUnmount(() => {
+      clearInterval(ticker);
+      offLive?.();
+    });
 
     return {
       store,
@@ -181,7 +188,7 @@ export const ActivityPage = {
         <template v-else>
           <div class="search-box">
             <Icon name="search" :size="14" />
-            <input v-model="query" type="search" placeholder="搜索日志内容" aria-label="搜索日志内容" />
+            <input v-model="query" type="text" placeholder="搜索日志内容" aria-label="搜索日志内容" />
           </div>
           <button class="btn btn-sm" :disabled="historyLoading" @click="loadHistory">
             <Spinner v-if="historyLoading" :size="13" /><Icon v-else name="refresh" :size="14" />刷新

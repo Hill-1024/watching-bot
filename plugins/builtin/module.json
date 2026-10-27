@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "builtin",
+  "name": "Builtin",
+  "version": "1.0.0",
+  "description": "与 IM 无关的日常生理能力:主人配置与每日咖啡配给。",
+  "entry": "./server/index.ts",
+  "panel": {
+    "entry": "./panel/index.js",
+    "title": "Builtin",
+    "icon": "coffee",
+    "route": "builtin",
+    "order": 10
+  },
+  "permissions": ["tools", "perception", "storage", "config"]
+}

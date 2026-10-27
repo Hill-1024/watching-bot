@@ -1,7 +1,7 @@
-import { computed, ref } from "/vendor/vue.esm-browser.prod.js";
+import { computed, onBeforeUnmount, ref } from "/vendor/vue.esm-browser.prod.js";
 import { ICONS } from "../icons.js";
 import { notify, store, dismissToast } from "../store.js";
-import { fmtNum } from "../utils.js";
+import { fmtClock, fmtNum, fmtSimClock, relativeTime, simNowMs } from "../utils.js";
 
 export const Icon = {
   name: "Icon",
@@ -256,4 +256,48 @@ export const Field = {
     <p v-if="error" class="field-error">{{ error }}</p>
     <p v-else-if="hint" class="field-hint">{{ hint }}</p>
   </div>`,
+};
+
+/**
+ * 自走时的小组件。
+ * 秒级时钟只让这一小块重绘,不会带着整页(尤其是几十行的日志列表)一起重新渲染。
+ */
+export const SimClock = {
+  name: "SimClock",
+  setup() {
+    const now = ref(Date.now());
+    const timer = setInterval(() => (now.value = Date.now()), 1000);
+    onBeforeUnmount(() => clearInterval(timer));
+    const label = computed(() => fmtSimClock(simNowMs(store.status, now.value)));
+    return { label };
+  },
+  template: `<span class="sim-clock">{{ label }}</span>`,
+};
+
+export const RealClock = {
+  name: "RealClock",
+  setup() {
+    const now = ref(Date.now());
+    const timer = setInterval(() => (now.value = Date.now()), 1000);
+    onBeforeUnmount(() => clearInterval(timer));
+    const label = computed(() => fmtClock(now.value));
+    return { label };
+  },
+  template: `<span class="real-clock">{{ label }}</span>`,
+};
+
+export const RelativeTime = {
+  name: "RelativeTime",
+  props: {
+    ts: { type: Number, default: 0 },
+    suffix: { type: String, default: "" },
+  },
+  setup(props) {
+    const now = ref(Date.now());
+    const timer = setInterval(() => (now.value = Date.now()), 10_000);
+    onBeforeUnmount(() => clearInterval(timer));
+    const label = computed(() => (props.ts ? relativeTime(props.ts, now.value) + props.suffix : "-"));
+    return { label };
+  },
+  template: `<span class="relative-time">{{ label }}</span>`,
 };

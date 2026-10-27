@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "qq",
+  "name": "QQ",
+  "version": "1.0.0",
+  "description": "QQ 接入:一份 OneBot v11 能力,NapCat 或 SnowLuma 二选一的运行时。",
+  "entry": "./server/index.ts",
+  "panel": {
+    "entry": "./panel/index.js",
+    "title": "QQ",
+    "icon": "send",
+    "route": "qq",
+    "order": 20
+  },
+  "permissions": ["tools", "perception", "storage", "realtime"],
+  "runtimeAccess": ["napcat", "snowluma"]
+}

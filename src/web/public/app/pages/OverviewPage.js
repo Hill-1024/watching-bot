@@ -1,9 +1,11 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "/vendor/vue.esm-browser.prod.js";
+import { onLive } from "../live.js";
 import { api, postJSON } from "../api.js";
 import { fetchStatus, notify, store } from "../store.js";
 import { KIND_META, VAR_META } from "../meta.js";
 import {
   compactNum,
+  debounce,
   durationText,
   fmtClock,
   fmtDay,
@@ -11,15 +13,14 @@ import {
   fmtPct,
   HOUR_MS,
   navigate,
-  relativeTime,
   renderMarkdown,
+  setIfChanged,
   startOfDay,
 } from "../utils.js";
 
 export const OverviewPage = {
   name: "OverviewPage",
   setup() {
-    const now = ref(Date.now());
     const history = ref(null);
     const usageToday = ref(null);
     const memory = ref(null);
@@ -27,6 +28,7 @@ export const OverviewPage = {
     const consolidating = ref(false);
 
     const status = computed(() => store.status);
+
     const varList = computed(() =>
       Object.entries(status.value?.defs || {}).map(([name, def]) => ({
         name,
@@ -63,7 +65,7 @@ export const OverviewPage = {
 
     const uptimeText = computed(() => {
       if (!status.value?.startedAt) return "-";
-      return durationText(now.value - status.value.startedAt);
+      return durationText(Date.now() - status.value.startedAt);
     });
 
     const usageSpark = computed(() => (usageToday.value?.buckets || []).map((b) => b.total));
@@ -95,7 +97,7 @@ export const OverviewPage = {
       try {
         const until = s.simMs + 1;
         const since = s.simMs - 2 * HOUR_MS;
-        history.value = await api(`/api/history?since=${since}&until=${until}&points=160`);
+        setIfChanged(history, await api(`/api/history?since=${since}&until=${until}&points=160`));
       } catch {
         // 概览页不因为曲线失败打断主信息
       }
@@ -105,7 +107,7 @@ export const OverviewPage = {
       try {
         const nowMs = Date.now();
         const since = startOfDay(nowMs);
-        usageToday.value = await api(`/api/usage?since=${since}&until=${nowMs}`);
+        setIfChanged(usageToday, await api(`/api/usage?since=${since}&until=${nowMs}`));
       } catch {
         // 统计接口不可用时保留旧数据
       }
@@ -113,7 +115,7 @@ export const OverviewPage = {
 
     async function loadMemory() {
       try {
-        memory.value = await api("/api/memory");
+        setIfChanged(memory, await api("/api/memory"));
       } catch {
         // 记忆接口不可用时保留旧数据
       }
@@ -148,25 +150,22 @@ export const OverviewPage = {
       }
     }
 
-    let ticker = null;
-    let historyTimer = null;
-    let usageTimer = null;
-    let memoryTimer = null;
+    // 只订阅概览真正需要的 topic;活动/注入等其他页面的变化不会让概览重绘
+    const scheduleHistory = debounce(() => void loadHistory(), 1200);
+    const scheduleUsage = debounce(() => void loadUsage(), 1500);
+    const scheduleMemory = debounce(() => void loadMemory(), 800);
+    const offs = [];
 
     onMounted(() => {
-      ticker = setInterval(() => (now.value = Date.now()), 1000);
       void loadHistory();
       void loadUsage();
       void loadMemory();
-      historyTimer = setInterval(() => !document.hidden && loadHistory(), 15_000);
-      usageTimer = setInterval(() => !document.hidden && loadUsage(), 60_000);
-      memoryTimer = setInterval(() => !document.hidden && loadMemory(), 10_000);
+      offs.push(onLive("state", scheduleHistory));
+      offs.push(onLive("usage", scheduleUsage));
+      offs.push(onLive("memory", scheduleMemory));
     });
     onBeforeUnmount(() => {
-      clearInterval(ticker);
-      clearInterval(historyTimer);
-      clearInterval(usageTimer);
-      clearInterval(memoryTimer);
+      for (const off of offs) off();
     });
 
     return {
@@ -184,7 +183,6 @@ export const OverviewPage = {
       memoryPreviewHtml,
       activityRecent,
       injectionsRecent,
-      now,
       acting,
       consolidating,
       kindMeta,
@@ -198,8 +196,7 @@ export const OverviewPage = {
       fmtNum,
       fmtPct,
       compactNum,
-      relativeTime,
-    };
+        };
   },
   template: `<div class="page">
     <header class="page-head">
@@ -208,8 +205,8 @@ export const OverviewPage = {
         <p>它此刻的身体状态、最近的行为与消耗。</p>
       </div>
       <div class="page-head-meta">
-        <LiveDot :live="store.statusError === ''" :label="store.statusError ? '连接中断' : '实时同步'" />
-        <span class="muted">{{ relativeTime(store.statusAt, now) }}</span>
+        <LiveDot :live="store.live.connected && !store.statusError" :label="store.statusError ? '连接中断' : '实时同步'" />
+        <RelativeTime :ts="store.statusAt" class="muted" />
       </div>
     </header>
 
@@ -221,8 +218,8 @@ export const OverviewPage = {
       <section class="status-hero">
         <div class="hero-status">
           <StatusPill :phase="status.phase" />
-          <div class="hero-sim">{{ status.sim }}</div>
-          <div class="hero-sub">模拟时间 · 真实 {{ fmtClock(now) }} · timeScale ×{{ status.timeScale }}</div>
+          <SimClock class="hero-sim" />
+          <div class="hero-sub">模拟时间 · 真实 <RealClock /> · timeScale ×{{ status.timeScale }}</div>
         </div>
         <div class="hero-stats">
           <div class="hero-stat"><span>本段睡眠</span><b>{{ sleepText }}</b></div>
@@ -280,7 +277,7 @@ export const OverviewPage = {
               <div class="memory-preview" v-html="memoryPreviewHtml"></div>
               <div v-if="latestDiary" class="memory-foot">
                 <span>最近日记 {{ latestDiary.date }}</span>
-                <span>{{ relativeTime(memory.updatedAt, now) }}</span>
+                <RelativeTime :ts="memory.updatedAt" />
               </div>
             </template>
           </Panel>

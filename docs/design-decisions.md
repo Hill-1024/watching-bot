@@ -81,3 +81,43 @@ NapCat 与 SnowLuma 都能提供 OneBot 11,所以我们没有在 core 里加分�
 - main 分支只用于开发和测试,不产生发布镜像。
 
 这条规则保证 `latest` 与版本标签、发布说明一致,避免"分支构建悄悄变成线上镜像"。
+
+## 11. 面板事件驱动,不做固定频率轮询
+
+早期面板用 2s/3s/8s/15s 的 `setInterval` 各拉各的接口。结果是:没变化时也在请求,有变化时又要等到下一个 tick;所有页面共享一个大的 `store`,B 页面的数据更新会牵连 A 页面重算。
+
+现在的约定:
+
+- 服务端只在「真的变了」时推一条 SSE(`/api/events`),事件带 `topic`;
+- 客户端按页面订阅 topic,只有订阅者才会拉数据、才会重渲染;
+- 模拟时钟用「最近一次 `simMs` + 本地流逝 × `timeScale`」外推,不需要秒级请求;
+- SSE 用 `fetch` + `ReadableStream` 自己读,避免把长期 token 放进 URL;
+- 合并在服务端做:`status` 900ms、`state` 4s、`usage` 2s、`plugin:*` 立即。
+
+推论:**任何"每隔 N 秒刷新一次"的写法都视为 bug**。需要新数据时,先问"什么事件意味着它变了",再订阅那个 topic。
+
+## 12. 插件页面故障必须局部化
+
+插件是可信代码,但仍然会写错。加载失败、契约版本不兼容、被卸载,都只能让这一页变成错误页;核心导航、其它页面、agent 工具集必须照常工作。
+
+因此动态 `import()` 的失败被显式捕获并渲染 `PluginErrorPage`,而不是让 Vue 抛到根节点白屏。插件启停单飞,失败时回滚半初始化资源;工具重名直接拒绝启动,避免"一个坏插件污染 agent 全部工具"。
+
+## 13. Docker 控制集中到 runtime-supervisor
+
+主进程不挂 Docker socket。`runtime-supervisor` 是独立容器,只暴露按 runtime ID 的 install/start/stop/restart/recreate/logs;镜像、容器名、卷、端口、安全选项全部来自代码白名单,调用方不能传 image/cmd/bind mount。
+
+理由:插件是可信代码,但"可信"不等于"应该拥有宿主 root"。即使 QQ 插件被写坏,它最多把 napcat/snowluma 容器搞停,不能 `docker run -v /:/host`。
+
+Supervisor 本身等价于 Docker 高权限,所以:必须有 token、不发布宿主端口、只在内网可达;文档里明确标注这一风险。
+
+## 14. QQ 只有一个插件身份
+
+NapCat 与 SnowLuma 曾是两个 `BotModule` 子类,工具实现靠继承复用。这会让"两个模块"渗透进配置、面板与切换逻辑。
+
+现在是一个 `qq` 插件:一份 OneBot 11 客户端/工具/存储,`runtimes.ts` 只描述 WebUI 端口、noVNC、登录入口与安全提示。切换 runtime 只换容器与连接端点,不换能力;同一时间只允许一套在线,失败回滚旧 runtime。
+
+## 15. 主人 QQ 的运行时修改在重启后生效
+
+`masterQQ` 目前仍由启动时的环境变量或 `data/builtin.json` 读取,用于睡眠中私聊唤醒的豁免额度。插件可以在自己的页面修改它并落盘,但核心不会为了一个字段去反向读取插件私有状态——那会破坏"核心不认识插件"的边界。
+
+代价是修改后需要重启才生效;这是有意的取舍,面板上有说明。

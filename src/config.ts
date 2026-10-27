@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { validateConfig } from "./config-schema.js";
 
 export interface ModelConfig {
   provider: string;
@@ -37,6 +38,16 @@ export interface StateRules {
   annoyancePerStormTick: number;
   stressDecayPerSimHour: number;
   socialRecoveryPerSimHourAlone: number;
+  /** 一条环境闲聊消息对社交电量的消耗(按强度线性) */
+  socialPerMessageIntensity: number;
+  /** 一次主动社交工具调用对社交电量的消耗 */
+  socialPerSocialTool: number;
+  /** 高频事件限率窗口(模拟分钟);0 = 不限率 */
+  pulseWindowSimMinutes: number;
+  /** 单窗口允许落地的感知强度总和 */
+  maxPerceptionIntensityPerWindow: number;
+  /** 单窗口允许落地的主动社交工具调用次数 */
+  maxSocialToolsPerWindow: number;
   moodRegressionToBaselinePerSimHour: number;
   moodBaseline: number;
 }
@@ -114,8 +125,14 @@ export interface AppConfig {
 }
 
 export function loadConfig(path = "config/default.json"): AppConfig {
-  const raw = JSON.parse(readFileSync(resolve(path), "utf-8")) as AppConfig;
-  return raw;
+  const text = readFileSync(resolve(path), "utf-8");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${path}: JSON 解析失败(${String(err)})`);
+  }
+  return validateConfig(raw, path);
 }
 
 export function modelApiKey(cfg: ModelConfig): string {

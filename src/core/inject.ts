@@ -20,24 +20,24 @@ const zeroUsage = {
  */
 export class Injector {
   private queue: AgentMessage[] = [];
-  private lastFeeling = new Map<FeelingKind, { tier: number; simTs: number }>();
   private pendingEnv = new Map<EnvKind, number>();
 
   constructor(
     private readonly getModelApi: () => string,
     private readonly repo: Repo,
     private readonly simNow: () => number,
+    /** 注入流水新增时的通知(面板事件驱动刷新用) */
+    private readonly onChange?: () => void,
   ) {}
 
   queueFeeling(kind: FeelingKind, tier: number): boolean {
     const now = this.simNow();
-    const last = this.lastFeeling.get(kind);
-    // 同类同档不重复;升档立即注入。冷却由调用方(manager)控制,这里兜底去重。
-    if (last && last.tier === tier) return false;
-    this.lastFeeling.set(kind, { tier, simTs: now });
+    // 冷却和阈值回落由 StateManager 统一控制;这里只负责把本次感受排入队列。
+    // 同种同档在冷却结束后必须可以再次进入,不能永久去重。
     const text = renderFeeling(kind, tier);
     this.queue.push(this.feelingMessage(text));
     this.repo.insertInjection(now, "feeling", kind, tier, text);
+    this.onChange?.();
     return true;
   }
 
@@ -47,6 +47,7 @@ export class Injector {
     this.queue.push(this.envMessage(text));
     this.pendingEnv.set(kind, (this.pendingEnv.get(kind) ?? 0) + 1);
     this.repo.insertInjection(now, "env", kind, null, text);
+    this.onChange?.();
   }
 
   /** 同类环境感知是否已有待注入的(用于感知去重,防止消息风暴灌水) */
@@ -58,6 +59,7 @@ export class Injector {
     const now = this.simNow();
     this.queue.push(this.envMessage(text));
     this.repo.insertInjection(now, "env", "raw", null, text);
+    this.onChange?.();
   }
 
   /** 系统提示 section 热更新(如 memory 刷新),随队列一起 flush */

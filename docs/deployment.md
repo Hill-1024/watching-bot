@@ -135,3 +135,46 @@ napcat 模块内置发送节流(`sendMinIntervalMs` + 随机抖动),这是特性
 
 **Q: 时区**
 模拟时间的「一天」跟宿主机时区走;compose 里默认 `TZ=Asia/Shanghai`。
+
+## 方式三补充:runtime supervisor
+
+从本版本起,compose 不再直接托管 NapCat。`docker-compose.yml` 只有两个服务:
+
+- `runtime-supervisor`:唯一挂载 `/var/run/docker.sock` 的容器,只监听内网 `:8099`;
+- `watching-bot`:面板 + agent,通过 `WATCHING_BOT_SUPERVISOR_URL/TOKEN` 调 supervisor。
+
+QQ 容器由 supervisor 按需创建,容器名固定为 `watching-qq-napcat` / `watching-qq-snowluma`,接入网络 `watching-bot-qqnet`,别名 `napcat` / `snowluma`。OneBot 的 3001 端口不发布到宿主,主进程用 `ws://napcat:3001` 或 `ws://snowluma:3001` 连接。
+
+```bash
+cp .env.example .env
+# 至少填:WATCHING_BOT_API_KEY、WATCHING_BOT_PANEL_TOKEN、WATCHING_BOT_SUPERVISOR_TOKEN
+docker compose up -d
+```
+
+首次使用:
+
+1. 打开面板 → 模块 → QQ;
+2. 选择 NapCat 或 SnowLuma → 自动拉镜像、建卷、建容器、启动;
+3. 点 WebUI(或 SnowLuma 的 noVNC)扫码登录;
+4. 在 WebUI 里确认 OneBot v11 WS 监听 3001;
+5. 回到 QQ 页面点「重连 OneBot」。
+
+宿主端口默认只绑 `127.0.0.1`:
+
+```text
+NapCat WebUI     127.0.0.1:6099
+SnowLuma WebUI   127.0.0.1:5099
+SnowLuma noVNC   127.0.0.1:6081
+OneBot WS        不发布
+```
+
+改端口会在 QQ 页面重建容器;数据卷不动,所以登录态与消息不会丢。
+
+切换 runtime 的语义:先停旧 runtime,再启新 runtime,连接成功后才把选择写盘。失败会回滚到旧 runtime;如果回滚也失败,页面会明确显示「当前没有可用 runtime」,不会假装健康。
+
+安全提醒:
+
+- SnowLuma 官方要求 `SYS_PTRACE` 与 `seccomp=unconfined`,安装前请确认能接受;
+- supervisor 等价于 Docker 高权限,`WATCHING_BOT_SUPERVISOR_TOKEN` 必须是长随机串;
+- 不要把面板、WebUI 或 noVNC 暴露到公网;需要远程访问就套 TLS 反向代理;
+- SnowLuma 的初始口令可能只出现在首次容器日志里,从 QQ 页面的「容器日志」读取。

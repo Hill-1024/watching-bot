@@ -4,6 +4,8 @@ import type { CoreEvent, Emitter } from "../core/events.js";
 import type { StateManager } from "./manager.js";
 
 export interface JudgeDeps {
+  /** judge.enabled=false 时不注册监听、不调用模型 */
+  enabled: boolean;
   events: Emitter<CoreEvent>;
   manager: StateManager;
   /** 每次调用时取当前模型/流函数/密钥(支持面板热切换模型) */
@@ -21,36 +23,37 @@ export interface JudgeDeps {
 
 /**
  * 双通道 LLM 情绪修正之「实时通道」:
- * 启发式规则只负责发现高唤醒事件(被@风暴、闹钟连环、激烈对话关键词),
+ * 启发式规则只负责发现高唤醒事件(被@风暴、闹钟连环),
  * 判读交给一次廉价 LLM 调用,输出 {moodDelta, stressDelta} 交给 manager 应用
- * (manager 侧另有冷却与每日上限,双保险)。
+ * (manager 侧另有开关、冷却与每日上限,双保险)。
  * 「睡眠通道」在 memory/consolidation 的 adjust_mood 工具,复用睡眠总结,零额外调用。
  */
-const AROUSAL_PATTERNS: RegExp[] = [
-  /吵架|滚|闭嘴|拉黑|绝交|烦死了| SB |傻逼/i,
-  /喜欢你|爱你|表白|生日快乐|恭喜|抱抱/,
-  /急|快回|紧急|出事了|救命/,
-];
-
 export class Judge {
   private busy = false;
 
   constructor(private readonly deps: JudgeDeps) {}
 
+  get enabled(): boolean {
+    return this.deps.enabled;
+  }
+
   start(): void {
+    if (!this.deps.enabled) {
+      this.deps.log?.("[judge] 已关闭(enabled=false),不注册实时通道");
+      return;
+    }
     this.deps.events.on((e) => {
       if (this.busy) return;
-      let flagged = false;
-      if (e.type === "perception" && e.kind === "mention_storm" && e.intensity >= 3) flagged = true;
-      if (e.type === "alarm_rang") flagged = true;
+      const flagged =
+        (e.type === "perception" && e.kind === "mention_storm" && e.intensity >= 3) ||
+        e.type === "alarm_rang";
       if (flagged) void this.evaluate();
     });
-    // 激烈对话关键词:扫 transcript 由 tick 周期驱动,避免每条消息都扫
   }
 
   /** 也可由外部(面板)手动触发评估 */
   async evaluate(): Promise<void> {
-    if (this.busy) return;
+    if (!this.deps.enabled || this.busy) return;
     const transcript = this.deps.recentTranscript();
     if (!transcript) return;
     this.busy = true;

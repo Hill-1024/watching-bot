@@ -29,6 +29,7 @@ export const VariableControl = {
   setup(props) {
     const draft = ref(fmtVal(props.value));
     const focused = ref(false);
+    const hovered = ref(false);
     const dirty = ref(false);
     const saving = ref(false);
     const saved = ref(false);
@@ -42,7 +43,8 @@ export const VariableControl = {
     watch(
       () => props.value,
       (v) => {
-        if (!focused.value && !dirty.value && !saving.value) draft.value = fmtVal(v);
+        // 正在编辑或鼠标停在控件上时不跟着后台状态跳,避免滑块/数字在指针下抖动
+        if (!focused.value && !hovered.value && !dirty.value && !saving.value) draft.value = fmtVal(v);
       },
     );
 
@@ -136,6 +138,7 @@ export const VariableControl = {
     return {
       draft,
       focused,
+      hovered,
       dirty,
       saving,
       saved,
@@ -149,7 +152,8 @@ export const VariableControl = {
       nudge,
     };
   },
-  template: `<div class="var-control" :class="{ 'is-editing': focused, 'is-saving': saving }">
+  template: `<div class="var-control" :class="{ 'is-editing': focused, 'is-saving': saving }"
+      @mouseenter="hovered = true" @mouseleave="hovered = false">
     <div class="vc-head">
       <div class="vc-title">
         <span class="vc-name">{{ label }}</span>
@@ -196,6 +200,7 @@ export const NumberField = {
     step: { type: Number, default: 1 },
     label: { type: String, default: "" },
     suffix: { type: String, default: "" },
+    hint: { type: String, default: "" },
     disabled: { type: Boolean, default: false },
     width: { type: String, default: "" },
   },
@@ -231,10 +236,6 @@ export const NumberField = {
       if (e.key === "Enter") {
         e.preventDefault();
         e.target.blur();
-      } else if (e.key === "Escape") {
-        draft.value = fmtVal(props.modelValue);
-        dirty.value = false;
-        e.target.blur();
       }
     }
     function nudge(dir) {
@@ -254,8 +255,8 @@ export const NumberField = {
       <input class="nf-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
         :value="draft" :disabled="disabled" :aria-label="label || '数值'"
         @input="draft = $event.target.value; dirty = true" @focus="focused = true; $event.target.select()" @blur="onBlur" @keydown="onKeydown" />
-      <span v-if="suffix" class="nf-suffix">{{ suffix }}</span>
     </div>
+    <span v-if="suffix" class="nf-suffix" :title="hint || undefined">{{ suffix }}</span>
     <button type="button" class="nf-step" :disabled="disabled" :aria-label="label + ' 增加'" @click="nudge(1)">
       <Icon name="plus" :size="14" />
     </button>

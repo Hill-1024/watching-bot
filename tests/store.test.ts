@@ -44,6 +44,21 @@ describe("repo: activity log", () => {
   });
 });
 
+describe("repo: 历史保留", () => {
+  it("超过条数上限时删掉最旧的,新行还在", () => {
+    const repo = makeRepo();
+    for (let i = 0; i < 8; i++) repo.insertStateHistory(i, "awake", { fatigue: i });
+    for (let i = 0; i < 5; i++) repo.insertInjection(i, "env", "message", null, `m${i}`);
+    const pruned = repo.pruneHistory({ state: 3, injections: 2, usage: 10, activity: 10 });
+    expect(pruned.state).toBe(5);
+    expect(pruned.injections).toBe(3);
+    const left = repo.stateHistorySince(0, 20) as { ts_sim: number }[];
+    expect(left.map((r) => r.ts_sim)).toEqual([5, 6, 7]);
+    expect(repo.injectionPage({ page: 1, pageSize: 10 }).total).toBe(2);
+    repo.close();
+  });
+});
+
 describe("repo: injections", () => {
   it("增量拉取只返回 afterId 之后的数据", () => {
     const repo = makeRepo();

@@ -5,6 +5,14 @@ export function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
 }
 
+export function fmtBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return "-";
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 export function fmtNum(n, digits = 0) {
   if (!Number.isFinite(n)) return "-";
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: digits }).format(n);
@@ -240,4 +248,38 @@ function inline(s) {
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+/** 模拟时钟:用最近一次服务端快照 + 本地流逝时间 × timeScale 外推,避免秒级轮询 */
+export function simNowMs(status, nowReal = Date.now()) {
+  if (!status || typeof status.simMs !== "number") return null;
+  const scale = typeof status.timeScale === "number" ? status.timeScale : 1;
+  const anchor = status.realMs || nowReal;
+  return status.simMs + Math.max(0, nowReal - anchor) * scale;
+}
+
+export function fmtSimClock(ms) {
+  if (ms == null || !Number.isFinite(ms)) return "-";
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * 只有内容真的变了才替换引用。
+ * 事件驱动更新时,服务端可能重复推同样的快照;直接 ref.value = next 会让 Vue
+ * 重新渲染整块内容(视觉上就是闪一下)。用内容比较挡掉无变化的赋值。
+ */
+export function setIfChanged(targetRef, next) {
+  const prev = targetRef.value;
+  if (prev === next) return false;
+  if (prev && next && typeof prev === "object" && typeof next === "object") {
+    try {
+      if (JSON.stringify(prev) === JSON.stringify(next)) return false;
+    } catch {
+      // 序列化失败时按变化处理
+    }
+  }
+  targetRef.value = next;
+  return true;
 }
