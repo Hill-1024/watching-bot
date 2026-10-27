@@ -201,7 +201,7 @@ export function loginInfoOf(
         available: Boolean(initial?.vncPassword),
         hint: initial?.vncPassword
           ? undefined
-          : "尚未从容器首次启动日志中解析到;卷还在时密码不变,重建容器会重新生成",
+          : "日志里的候选都未通过真实认证握手:密码持久化在数据卷(/app/data/config/vnc-password)中,可能被历史部署覆盖;可进容器 x11vnc -storepasswd 重设",
       },
     ],
     instructions: [

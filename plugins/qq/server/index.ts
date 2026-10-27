@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import type { PluginContext, PluginHealth, PluginResponse, RunningPlugin } from "../../../src/plugins/types.js";
 import { OneBotAdapter } from "./onebot/adapter.js";
 import {
@@ -152,8 +153,10 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
   };
 
   /**
-   * SnowLuma 的 WebUI 初始账密与 noVNC 密码只在容器首次启动日志里打印一次。
-   * 这里从 supervisor 日志解析并做 60 秒节流缓存;容器重启(restart)后置空重取。
+   * SnowLuma 的 WebUI 初始账密只在容器首次启动日志里打印一次(取最后一次打印的为准);
+   * noVNC 密码则不可信——容器重启后数据卷里的旧密码可能盖回日志打印值,
+   * 所以把日志里出现过的候选逐个对真实 VNC 端口做认证握手,只用验证通过的那一个。
+   * 结果做 60 秒节流缓存;容器重启(restart)后置空重取。
    */
   let initialCredentials: SnowlumaInitialCredentials | null = null;
   let initialCredentialsAt = 0;
@@ -162,20 +165,53 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
     for (let m = re.exec(text); m; m = re.exec(text)) out = m;
     return out;
   };
+  const allMatches = (text: string, re: RegExp): string[] => {
+    const out: string[] = [];
+    for (let m = re.exec(text); m; m = re.exec(text)) out.push(m[1]!);
+    return out;
+  };
+  /** 对 VNC 端口做一次真实 RFB 认证握手:single-DES 需要 OpenSSL legacy provider,用子进程跑 */
+  const verifyVncPassword = (candidates: string[]): string | undefined => {
+    if (!candidates.length || !ctx.supervisor) return undefined;
+    const script = [
+      "const net=require('net'),crypto=require('crypto');",
+      "function k(pw){const b=Buffer.alloc(8);const s=Buffer.from(pw,'latin1').subarray(0,8);for(let i=0;i<8;i++){let c=s[i]||0,r=0;for(let j=0;j<8;j++)r|=((c>>j)&1)<<(7-j);b[i]=r;}return b;}",
+      "const [host,cands]=process.argv.slice(1);",
+      "(async()=>{for(const pw of cands.split(',')){try{",
+      "const ok=await new Promise(res=>{const s=net.connect(5900,host);let st=0,n=0,buf=Buffer.alloc(0);const fin=x=>{s.destroy();res(x);};",
+      "s.on('data',d=>{buf=Buffer.concat([buf,d]);",
+      "if(st===0){if(buf.length<12)return;if(!buf.toString('latin1',0,12).startsWith('RFB'))return fin('no-rfb');s.write('RFB 003.008\\n');buf=buf.subarray(12);st=1;}",
+      "if(st===1){if(buf.length<1)return;n=buf[0];if(buf.length<1+n)return;const t=buf.subarray(1,1+n);if(!t.includes(2))return fin('no-auth');s.write(Buffer.from([2]));buf=buf.subarray(1+n);st=2;}",
+      "if(st===2){if(buf.length<16)return;const c=crypto.createCipheriv('des-ecb',k(pw),null);c.setAutoPadding(false);s.write(Buffer.concat([c.update(buf.subarray(0,16)),c.final()]));buf=buf.subarray(16);st=3;}",
+      "if(st===3){if(buf.length<4)return;fin(buf.readInt32BE(0)===0?'ok':'bad');}});",
+      "s.on('error',e=>fin('err'));setTimeout(()=>fin('timeout'),4000);});",
+      "if(ok==='ok'){console.log(pw);return;}}catch{}}})();",
+    ].join("\n");
+    try {
+      const r = spawnSync(process.execPath, ["--openssl-legacy-provider", "-e", script, ...candidates], {
+        timeout: 20_000,
+      });
+      const out = (r.stdout?.toString() ?? "").trim();
+      return out || undefined;
+    } catch {
+      return undefined;
+    }
+  };
   const snowlumaInitialCredentials = async (): Promise<SnowlumaInitialCredentials> => {
     if (initialCredentials && Date.now() - initialCredentialsAt < 60_000) return initialCredentials;
     const out: SnowlumaInitialCredentials = {};
     try {
       if (ctx.supervisor) {
         const text = await ctx.supervisor.logs("snowluma", 4000);
-        // 容器可能多次重启、每次都打印一条初始凭据:取最后一次(当前生效)的
+        // WebUI 初始账密:最后一次打印的为准
         const cred = lastMatch(text, /initial credentials:\s*user=(\S+)\s+password=(\S+)/g);
         if (cred) {
           out.webuiUser = cred[1];
           out.webuiPassword = cred[2];
         }
-        const vnc = lastMatch(text, /(?:远程桌面密码|remote desktop password):\s*(\S+)/g);
-        if (vnc) out.vncPassword = vnc[1];
+        // noVNC 密码:候选按打印时间倒序,逐个真实握手验证
+        const vncCandidates = allMatches(text, /(?:远程桌面密码|remote desktop password):\s*(\S+)/g).reverse();
+        out.vncPassword = verifyVncPassword([...new Set(vncCandidates)]);
       }
     } catch (err) {
       ctx.logger.warn(`解析 SnowLuma 初始凭据失败: ${String(err)}`);
