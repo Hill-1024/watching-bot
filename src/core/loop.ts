@@ -348,6 +348,8 @@ export class AgentCore implements CoreCommands, MachineHost {
       this.log(`[loop] kick (${reason}),注入 ${batch.length - 1} 条`);
       await agent.prompt(batch);
       await agent.waitForIdle();
+      // 一次 run 计一次「做事」的疲惫成本(按每条 assistant 消息计会把一次 run 放大几十倍)
+      this.applyState({ type: "turn" });
     } catch (err) {
       this.log(`[loop] run 异常: ${String(err)}`);
     } finally {

@@ -60,7 +60,9 @@ export function applyStateEvent(
     case "toolTag":
       if (event.tag === "social") {
         set("social", -r.socialPerSocialTool);
-        set("mood", 1.5);
+        // 心情增益与社交成本同量级,且随限流窗口一起封顶;
+        // 否则「聊天十次 = 心情 +15」会让 mood 很快钉死在 100。
+        set("mood", Math.min(1.5, r.socialPerSocialTool * 0.25));
       }
       break;
     case "sleepStart":

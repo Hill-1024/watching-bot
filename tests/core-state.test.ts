@@ -83,7 +83,7 @@ function harness(fatigue = 30) {
         timer.cb(sim);
       }
     },
-    turn: () => agentEvent?.({ type: "turn_end", message: { role: "assistant", content: [] } }),
+    turn: () => core.applyState({ type: "turn" }),
     tick: (minutes: number) => {
       tick?.(sim);
       sim += minutes * MIN;
@@ -93,7 +93,7 @@ function harness(fatigue = 30) {
 }
 
 describe("core 与状态管理器集成", () => {
-  it("一次 assistant turn 只应用一次疲惫增量", () => {
+  it("run 结束只应用一次疲惫增量(不按每条 assistant 消息重复计)", () => {
     const h = harness();
     try {
       h.turn();

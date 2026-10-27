@@ -1,3 +1,4 @@
+import { MIN } from "./clock.js";
 import type { Repo } from "../store/db.js";
 import type { EnvKind, FeelingKind } from "./copy.js";
 import type { Emitter, CoreEvent } from "./events.js";
@@ -11,6 +12,8 @@ export interface MachineHost {
   injectFeeling(kind: FeelingKind, tier: number): void;
   /** 排程一次尽快的 kick(去重) */
   requestKick(reason: string): void;
+  /** 排程一次未来 kick(如入睡被拒后的下次尝试) */
+  scheduleKickIn(simMs: number, reason: string): void;
   events: Emitter<CoreEvent>;
   repo: Repo;
   /** 睡眠转换钩子:执行记忆归并(睡眠期长期记忆整理),完成后调用返回的回调 */
@@ -78,7 +81,9 @@ export class SleepMachine {
     }
     if (this.phase !== "awake") return "你已经睡着了。";
     if (this.host.fatigueNow() < this.host.minFatigueToSleep()) {
-      return "你躺下试了试,但一点都不困——脑子清醒得像刚充满电。睡不着,起来吧。";
+      // 入睡被拒 ≠ 可以马上再试:安排一个合理的下次尝试时刻,防止模型每几秒重试一次把状态打爆
+      this.host.scheduleKickIn(45 * MIN, "sleep-retry");
+      return "你躺下试了试,但一点都不困——脑子清醒得像刚充满电。睡不着,起来吧,过会儿再说。(已为你安排 45 分钟后再考虑入睡,这段时间去做点别的或放空。)";
     }
     await this.requestSleep("voluntary");
     return "你放下一切,钻进了被窝。意识慢慢沉入黑暗。";

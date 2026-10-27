@@ -163,6 +163,23 @@ export class OneBotAdapter {
 
   private onEvent(raw: Record<string, unknown>): void {
     if (!this.host) return;
+    // 戳一戳(OneBot 通知事件,不是消息)。只响应当前 bot 在群里被戳:
+    // 落到 @提及流并注入「有人戳了你一下」;模型可用 get_recent_at_mentions 看是谁,
+    // 想回戳就调 poke_user。
+    if (raw.post_type === "notice") {
+      if (raw.notice_type !== "notify" || raw.sub_type !== "poke") return;
+      const target = Number(raw.target_id ?? raw.user_id);
+      const groupId = Number(raw.group_id ?? 0);
+      if (target !== this.selfId || !groupId) return;
+      this.store?.insertPoke({
+        user_id: Number(raw.user_id),
+        target_id: target,
+        group_id: groupId,
+        time: Number(raw.time ?? Math.floor(Date.now() / 1000)),
+      });
+      this.host.emitPerception({ kind: "mention", intensity: 1, source: `group:${groupId}` });
+      return;
+    }
     if (raw.post_type !== "message") return;
     const e = raw as unknown as ObMessageEvent;
     const segments: ObSegment[] = Array.isArray(e.message)
@@ -458,6 +475,25 @@ export class OneBotAdapter {
       },
     };
 
+    const pokeParams = Type.Object({
+      groupId: Type.Number({ description: "群号(get_recent_at_mentions 里 group:xxx 的数字)" }),
+      userId: Type.Number({ description: "对方的 QQ 号" }),
+    });
+    const pokeUser: AgentTool<typeof pokeParams> = {
+      name: "poke_user",
+      label: "戳一戳某人",
+      description:
+        "在群里戳某人一下。被戳了想回戳、或者想轻轻提醒某人时注意一下时用它。不是每条消息都值得回一戳,克制一点。",
+      parameters: pokeParams,
+      execute: async (_id, params) => {
+        await client().call("group_poke", { group_id: params.groupId, user_id: params.userId });
+        return {
+          content: [{ type: "text", text: `你在群里戳了 ${params.userId} 一下。` }],
+          details: { groupId: params.groupId, userId: params.userId },
+        };
+      },
+    };
+
     // ---------- 图片:多模态查看 + 表情包库 ----------
 
     /** 消息 id → 可下载 url(优先用入库 url,缺失时走 get_image) */
@@ -628,6 +664,8 @@ export class OneBotAdapter {
       listGroups,
       getProfile,
       recentAt,
+      // 戳一戳
+      pokeUser,
       // 群管理
       setGroupBan,
       setGroupSpecialTitle,

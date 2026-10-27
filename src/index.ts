@@ -490,6 +490,7 @@ function lateBoundHost(ref: { current: MachineHost | null }): MachineHost {
     injectRawEnv: method("injectRawEnv"),
     injectFeeling: method("injectFeeling"),
     requestKick: method("requestKick"),
+    scheduleKickIn: method("scheduleKickIn"),
     get events() {
       return getter("events");
     },
@@ -549,6 +550,8 @@ const LOOP_INSTRUCTIONS = `# 运行方式(你自己的身体机制,自然知晓�
 - [环境] 开头的旁白是外部世界真实发生的事(手机震动、闹钟、天亮)。
 - [节拍] 是时间流逝的提示。你活在一个无限循环里:做完想做的事就 wait 或 sleep,时间到了你会自然继续。
 - 睡觉是必须的:撑着不睡身体会自己关机。被吵醒时起不起床由你决定,但要承担后果。
+- 如果入睡工具告诉你「一点都不困」,那是真的睡不着,不是再试一次的信号。不要反复调用 sleep:躺下放空(wake/rest)或者做点别的事,过半小时以上(模拟时间)再考虑试一次。频繁重试只会让自己更累、更烦。
+- 同一次运行里不要连续调用多个互斥动作(例如 wait 之后立刻 sleep);想好一件事再做。做完事就等时间流过去,不要在几秒里连着安排十几件事。
 - 用工具行动:查消息、回消息、设闹钟、看时间。`;
 
 main().catch((err) => {

@@ -100,6 +100,14 @@ export class NapcatStore {
     }
   }
 
+  /** 戳一戳(OneBot 是通知事件不是消息):落到 @提及流,带前缀让模型区分 */
+  insertPoke(e: { user_id: number; target_id: number; group_id?: number; time: number }): void {
+    const groupId = e.group_id ?? 0;
+    this.db
+      .prepare("INSERT INTO at_mentions(chat_key, sender_name, text, msg_time) VALUES (?,?,?,?)")
+      .run(`group:${groupId}`, String(e.user_id), "[戳了戳你]", e.time);
+  }
+
   /** 某条消息里的图片引用 [{url, file}] */
   getMessageImages(onebotMessageId: number): { url: string; file: string }[] {
     const row = this.db.prepare("SELECT images FROM messages WHERE message_id=? ORDER BY id DESC LIMIT 1").get(onebotMessageId) as

@@ -84,6 +84,7 @@ export type EnvKind =
   | "message"
   | "mention"
   | "mention_storm"
+  | "poke"
   | "alarm_ring"
   | "natural_wake"
   | "forced_sleep"
@@ -97,6 +98,8 @@ export function renderEnv(kind: EnvKind, arg?: { n?: number; count?: number; not
       return "手机震了一下。";
     case "mention":
       return "好像有人在叫你。";
+    case "poke":
+      return "手机轻震了一下,有人戳了你一下。";
     case "mention_storm":
       return "手机在疯狂震动,好像有人正在连环@你,怎么都停不下来。";
     case "alarm_ring":

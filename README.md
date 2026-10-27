@@ -20,7 +20,7 @@
 
 watching-bot 以 [pi](https://github.com/earendil-works/pi)（`pi-agent-core` + `pi-ai`，库模式）为 agent 内核，外挂一套 **LLM 不可见的五维状态**（疲惫 / 心情 / 烦躁 / 压力 / 社交电量）与 **睡醒调度器**。状态不会作为数字泄露给模型，而是通过「混合注入」变成它自己的体感与外部旁白——所以它会真的困、会烦、会赖床，也会在睡醒之后记得一些事。
 
-QQ 是能力之一，不是核心。它是一个插件，内部再选 NapCat 或 SnowLuma 之一作为 runtime；两套运行时共享同一份 OneBot 11 实现、18 个工具、消息库与表情包库，可在 QQ 页面里切换。Docker 下由独立的 `runtime-supervisor` 按需拉镜像、建容器、启停与回滚，主进程不持有 Docker 权限。
+QQ 是能力之一，不是核心。它是一个插件，内部再选 NapCat 或 SnowLuma 之一作为 runtime；两套运行时共享同一份 OneBot 11 实现、19 个工具、消息库与表情包库，可在 QQ 页面里切换。Docker 下由独立的 `runtime-supervisor` 按需拉镜像、建容器、启停与回滚，主进程不持有 Docker 权限。
 
 ---
 
@@ -32,7 +32,7 @@ QQ 是能力之一，不是核心。它是一个插件，内部再选 NapCat 或
 | **身体** | 五维隐藏状态；数值不进入提示词，只按区间翻译成主观文案 |
 | **作息** | 自愿入睡 / 疲惫强制关机 / 闹钟重响 / 赖床 / @风暴与私聊分级唤醒 / 睡眠期记忆归并 |
 | **记忆** | 热上下文交给 pi compaction；「睡醒仍该记得」的事实写入 `MEMORY.md` 与日记 |
-| **QQ** | 一个 QQ 插件，NapCat / SnowLuma 二选一 runtime；同一套 18 个工具与数据 |
+| **QQ** | 一个 QQ 插件，NapCat / SnowLuma 二选一 runtime；同一套 19 个工具与数据 |
 | **面板** | Vue 3 管理后台：状态曲线、活动日志、感知注入、Token 统计、长期记忆、模型热切换、每插件独立页面；数据由 SSE 事件驱动，不轮询 |
 | **扩展** | 新增能力 = 在 `plugins/<id>/` 放一个 `module.json` + 服务端入口；核心、主路由与导航零改动 |
 
@@ -54,7 +54,7 @@ QQ 是能力之一，不是核心。它是一个插件，内部再选 NapCat 或
 | 运行时 | 状态 | 说明 |
 |---|---|---|
 | **NapCat** | 默认 | OneBot 11；面板 NapCat 卡片显示 WebUI 登录 token，可保存自定义 WebUI 端口并等待运行时重启 |
-| **SnowLuma** | 可选 | OneBot 11；复用 NapCat 的 18 个工具实现，能力对齐；与 NapCat 共用消息、未读游标与表情包 |
+| **SnowLuma** | 可选 | OneBot 11；复用 NapCat 的 19 个工具实现，能力对齐；与 NapCat 共用消息、未读游标与表情包 |
 
 选择保存在 `data/qq-backend.json`（gitignored），面板「模块与系统 → QQ 接入」内互斥切换，默认 NapCat。切换只停 / 启 agent 侧模块，**不负责启动或停止 QQ 进程**：
 
@@ -141,7 +141,7 @@ WATCHING_BOT_FAUX_LLM=1 WATCHING_BOT_TIMESCALE=300 npm start
 | 睡眠 | 自愿 `sleep` / 疲惫 ≥ 90 强制；入睡先做睡眠期归并（日记 + `MEMORY.md` + 周记），日常压缩复用 pi compaction |
 | 唤醒 | 自然醒 / 硬上限 / 面板强制；闹钟与 @ 风暴 → 模型自己决定 `wake_up` 还是赖床；赖满 6 次强制拽醒 |
 | 闹钟 | `set_alarm` / `cancel_alarm`，模型自己上弦 |
-| QQ | 18 个工具：消息读写、未读游标、引用回复、发送节流、群管理、贴表情、表情包库与多模态看图 |
+| QQ | 19 个工具：消息读写、未读游标、引用回复、发送节流、群管理、贴表情、表情包库与多模态看图 |
 | judge | 双通道情绪修正：实时（风暴 / 闹钟）+ 睡眠结算，冷却与每日上限双保险 |
 | 模型 | pi 网关 40+ provider；面板热切换；agent 压缩窗口跟随当前模型的实际 `contextWindow` |
 
@@ -155,7 +155,7 @@ src/
 ├── core/                 # pi Agent、无限循环、睡醒状态机、时钟、注入、模型网关
 ├── state/                # 五维规则引擎、状态管理器、judge
 ├── modules/
-│   ├── napcat/           # OneBot 11 客户端 + 18 工具 + 未读游标 + WebUI 配置
+│   ├── napcat/           # OneBot 11 客户端 + 19 工具 + 未读游标 + WebUI 配置
 │   ├── snowluma/         # 第二套 OneBot 运行时，复用同一套工具
 │   └── builtin/          # 咖啡提神、主人配给与运行时配置
 ├── memory/               # 睡眠期长期记忆归并
@@ -174,7 +174,7 @@ tools/                    # mock-onebot、调试脚本
 | [docs/architecture.md](docs/architecture.md) | 架构、模块总线、无限循环、睡醒状态机、持久化 |
 | [docs/configuration.md](docs/configuration.md) | 模型接入、时间与状态、QQ 双运行时、环境变量 |
 | [docs/deployment.md](docs/deployment.md) | 本地体验、直连 NapCat、Docker Compose、备份与 FAQ |
-| [docs/modules.md](docs/modules.md) | `BotModule` 契约、感知归一化、18 工具、扩展方式 |
+| [docs/modules.md](docs/modules.md) | `BotModule` 契约、感知归一化、19 工具、扩展方式 |
 | [docs/design-decisions.md](docs/design-decisions.md) | 关键设计约束与取舍 |
 
 ## 开发

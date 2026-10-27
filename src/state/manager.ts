@@ -62,7 +62,8 @@ export class StateManager {
         this.apply("tick", `tick +${Math.round(e.simDeltaMs / MIN)}m`, { type: "tick", simDeltaMs: e.simDeltaMs });
         break;
       case "turn_end":
-        this.apply("turn", "turn", { type: "turn" });
+        // 疲惫的 turn 成本由 loop 在每次 run 结束时施加一次(按 run 而非按 assistant 消息)。
+        // 这里不能再加一遍,否则一次 run 会被重复计费多次。
         break;
       case "tool_call":
         for (const tag of e.tags) this.applyToolTag(e.name, tag);

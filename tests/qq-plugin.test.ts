@@ -26,6 +26,7 @@ const EXPECTED_TOOLS = [
   "list_groups",
   "get_profile",
   "get_recent_at_mentions",
+  "poke_user",
   "set_group_ban",
   "set_group_special_title",
   "get_group_member_info",
