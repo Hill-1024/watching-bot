@@ -21,6 +21,10 @@ export interface TimeConfig {
   /** 调试用固定起点;留空 = 全新启动以现实时间为锚(推荐) */
   simStart?: string;
   tickRealMs: number;
+  /** 重启时把模拟钟对齐真实时间(默认 true,仅 timeScale=1 生效) */
+  syncOnResume?: boolean;
+  /** 允许的偏差(模拟分钟);超过就对齐,默认 10 */
+  maxResumeDriftSimMinutes?: number;
 }
 
 export interface StateVarDef {

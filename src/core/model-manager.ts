@@ -14,6 +14,45 @@ export interface ModelOverride {
   thinkingLevel?: string;
 }
 
+/** 容器内访问宿主机服务的别名(Docker Desktop 默认提供;Linux 由 compose 的 extra_hosts 注入) */
+const HOST_GATEWAY = "host.docker.internal";
+
+/** 是否运行在容器里(用于判断 127.0.0.1 指的是容器还是宿主机) */
+function inContainer(): boolean {
+  return existsSync("/.dockerenv");
+}
+
+/**
+ * 本地回环网关检测:容器里的 127.0.0.1/localhost 指向容器自身,永远连不到宿主机服务。
+ * 这里不做静默改写(会让用户以为填对了),只做检测并把「应该填什么」讲清楚。
+ */
+export function isLoopbackGatewayUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "0.0.0.0";
+  } catch {
+    return false;
+  }
+}
+
+/** 容器内填回环地址时给出可执行的替代建议;非容器/非回环返回 null */
+export function gatewayHint(url: string): string | null {
+  if (!url || !inContainer() || !isLoopbackGatewayUrl(url)) return null;
+  let port = "";
+  try {
+    port = new URL(url).port;
+  } catch {
+    // 忽略:URL 解析失败时只给通用建议
+  }
+  const suggested = `http://${HOST_GATEWAY}${port ? `:${port}` : ""}`;
+  return `容器里的 127.0.0.1/localhost 指向容器自己,访问不到宿主机服务。请把 baseUrl 改成 ${suggested}(host.docker.internal 已在 compose 中配置,直接可用)。`;
+}
+
+/** 把回环网关地址替换成宿主机别名(供面板「一键替换」使用,不是静默行为) */
+export function toHostGatewayUrl(url: string): string {
+  return url.replace(/^(\w+:\/\/)(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)(?=[:/]|$)/i, `$1${HOST_GATEWAY}`);
+}
+
 export interface ModelView {
   faux: boolean;
   provider: string;
@@ -25,6 +64,10 @@ export interface ModelView {
   apiKeyEnv: string;
   apiKeySet: boolean;
   apiKeyMasked: string;
+  /** 当前配置不可用的原因(如容器内填了 127.0.0.1 网关);无问题为 null */
+  warning: string | null;
+  /** 覆盖层里原样保存的 baseUrl(可能与生效值不同,用于面板回显与一键修正) */
+  configuredBaseUrl: string;
 }
 
 /**
@@ -50,10 +93,14 @@ export class ModelManager {
         this.opts.log("[model] data/model.json 解析失败,忽略覆盖层");
       }
     }
+    const hint = this.override.baseUrl ? gatewayHint(this.override.baseUrl) : null;
+    if (hint) {
+      this.opts.log(`[model][warn] baseUrl 不可用:${hint}`);
+    }
     if (!opts.faux) this.rebuild();
   }
 
-  /** 生效配置(覆盖层优先) */
+  /** 生效配置(覆盖层优先;回环网关不静默改写,由 warning() 提示用户修正) */
   private effective(): ModelConfig {
     return {
       provider: this.override.provider ?? this.base.provider,
@@ -117,6 +164,9 @@ export class ModelManager {
     if (typeof partial.contextWindow === "number" && partial.contextWindow > 0) merged.contextWindow = Math.round(partial.contextWindow);
     if (typeof partial.maxTokens === "number" && partial.maxTokens > 0) merged.maxTokens = Math.round(partial.maxTokens);
     if (typeof partial.thinkingLevel === "string" && partial.thinkingLevel.trim() !== "") merged.thinkingLevel = partial.thinkingLevel.trim();
+    // 容器内的回环地址永远连不通宿主机:直接拒绝并给出可执行的替代值,而不是静默改写
+    const loopbackHint = merged.baseUrl ? gatewayHint(merged.baseUrl) : null;
+    if (loopbackHint) return { ok: false, error: loopbackHint };
     this.override = merged;
     try {
       this.rebuild();
@@ -143,6 +193,11 @@ export class ModelManager {
     return { ok: true };
   }
 
+  /** 当前配置的问题提示(baseUrl 回环等在容器里不可用的值);无问题返回 null */
+  warning(): string | null {
+    return gatewayHint(this.override.baseUrl ?? this.base.baseUrl);
+  }
+
   view(): ModelView {
     const e = this.effective();
     const key = e.apiKey || process.env[this.base.apiKeyEnv] || "";
@@ -157,6 +212,8 @@ export class ModelManager {
       apiKeyEnv: this.base.apiKeyEnv,
       apiKeySet: key !== "",
       apiKeyMasked: key ? `${key.slice(0, 3)}••••${key.slice(-4)}` : "",
+      warning: this.warning(),
+      configuredBaseUrl: this.override.baseUrl ?? "",
     };
   }
 

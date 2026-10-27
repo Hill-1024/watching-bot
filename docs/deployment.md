@@ -109,6 +109,23 @@ docker compose build watching-bot
 docker compose up -d
 ```
 
+## 访问宿主机上的服务(本地模型网关等)
+
+主框架跑在容器里,**容器内的 `127.0.0.1` / `localhost` 是容器自己**,不是你的电脑。你在宿主机上跑的本地网关(pi gateway、Ollama、LM Studio、各类 OpenAI 兼容端点)必须用下面这个别名访问:
+
+```text
+http://host.docker.internal:<端口>/v1
+```
+
+- compose 已给 `watching-bot` 注入 `extra_hosts: host.docker.internal:host-gateway`,Docker Desktop 与 Linux 都开箱可用,不需要改代码或重建镜像;
+- 面板「模型 → baseUrl」填 `http://127.0.0.1:3425/v1` 这类回环地址会被**拒绝并提示正确写法**(不会静默改写,避免你以为填对了);面板提供「一键替换」按钮;
+- 启动时如果 `data/model.json` 里存的仍是回环地址,日志会打 `[model][warn]` 并在模型页显示红色提示;
+- 宿主机直跑(非 Docker)时 `127.0.0.1` 仍然正常,不受影响。
+
+## 模拟时间与真实时间
+
+`time.syncOnResume`(默认 `true`)在 `timeScale=1` 时把重启后的模拟钟对齐真实时间:机器关机/容器停止期间模拟时间不会前进,不校正的话「它的一天」会永久落后(例如停机 24 小时,它就一直在过昨天)。允许的偏差由 `time.maxResumeDriftSimMinutes`(默认 10 分钟)控制,校正时会打一行日志说明偏差多少小时。`timeScale > 1` 的加速测试模式不做校正(模拟时间本来就会跑在真实时间前面)。
+
 ## 环境变量
 
 见 `docs/configuration.md` 末尾的总表。

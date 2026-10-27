@@ -31,6 +31,16 @@ export const ModelPage = {
     });
     const thinkingOptions = THINKING_LEVELS.map((v) => ({ value: v, label: v }));
 
+    // 容器里的 127.0.0.1/localhost 指向容器自己:明确提示,不静默改写
+    const LOOPBACK_RE = /^(\w+:\/\/)(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)(?=[:/]|$)/i;
+    const isLoopback = (url) => LOOPBACK_RE.test(String(url || "").trim());
+    const loopbackDraft = computed(() => isLoopback(form.value.baseUrl));
+    const toHostGateway = (url) => String(url || "").replace(LOOPBACK_RE, "$1host.docker.internal");
+    function useHostGateway() {
+      form.value.baseUrl = toHostGateway(form.value.baseUrl);
+      notify("success", "已改为 host.docker.internal,记得点「应用并热切换」");
+    }
+
     async function loadCatalog(provider, selected) {
       if (!provider) return;
       if (model.value?.baseUrl && provider === model.value.provider) {
@@ -124,6 +134,9 @@ export const ModelPage = {
       form,
       providerOptions,
       thinkingOptions,
+      loopbackDraft,
+      toHostGateway,
+      useHostGateway,
       load,
       onProviderChange,
       apply,
@@ -175,8 +188,18 @@ export const ModelPage = {
               <datalist id="model-catalog"><option v-for="id in catalog" :key="id" :value="id"></option></datalist>
             </Field>
             <Field class="span-2" label="baseUrl" hint="留空使用 pi 目录端点;填写后走任意 OpenAI 兼容端点">
-              <input v-model="form.baseUrl" class="input" :disabled="model.faux" placeholder="https://open.bigmodel.cn/api/paas/v4" />
+              <input v-model="form.baseUrl" class="input" :disabled="model.faux" placeholder="http://host.docker.internal:11434/v1 或 https://open.bigmodel.cn/api/paas/v4" />
             </Field>
+            <p v-if="loopbackDraft" class="field-error span-2">
+              容器里的 127.0.0.1/localhost 指向容器自身,访问不到你本机的网关。请填
+              <code>{{ toHostGateway(form.baseUrl) }}</code>(compose 已配置 host.docker.internal)。
+              <button class="btn btn-ghost btn-xs" @click="useHostGateway">一键替换</button>
+            </p>
+            <p v-else-if="model.warning" class="field-error span-2">
+              {{ model.warning }}
+              <button v-if="model.configuredBaseUrl" class="btn btn-ghost btn-xs"
+                @click="form.baseUrl = toHostGateway(model.configuredBaseUrl)">填入修正值</button>
+            </p>
             <Field label="API Key" :hint="model.apiKeySet ? '已配置,留空保持不变;填写后写入 data/model.json' : '也可改用环境变量 ' + model.apiKeyEnv">
               <input v-model="form.apiKey" class="input" type="password" autocomplete="off" :disabled="model.faux" placeholder="留空保持现有配置" />
             </Field>

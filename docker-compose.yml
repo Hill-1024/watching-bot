@@ -40,6 +40,9 @@ services:
       - NAPCAT_URL=${NAPCAT_URL:-}
       - SNOWLUMA_URL=${SNOWLUMA_URL:-}
       - TZ=Asia/Shanghai
+    extra_hosts:
+      # 本地模型网关:容器内用 host.docker.internal 访问宿主机服务(Linux 需显式注入)
+      - "host.docker.internal:host-gateway"
     ports:
       # 只绑 loopback:面板不是公网服务
       - "127.0.0.1:8080:8080"

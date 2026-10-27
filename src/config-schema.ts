@@ -29,6 +29,10 @@ const TimeSchema = Type.Object({
   timeScale: Type.Number({ exclusiveMinimum: 0 }),
   simStart: Type.Optional(Type.String()),
   tickRealMs: PosInt,
+  /** 重启时把模拟钟对齐真实时间(默认 true,仅 timeScale=1 生效) */
+  syncOnResume: Type.Optional(Type.Boolean()),
+  /** 允许的偏差(模拟分钟);超过就对齐,默认 10 */
+  maxResumeDriftSimMinutes: Type.Optional(NonNeg),
 });
 
 const StateVarDefSchema = Type.Object({

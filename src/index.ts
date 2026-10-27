@@ -67,15 +67,32 @@ async function main(): Promise<void> {
   const cfg = loadConfig(cfgPath);
   const persisted = loadPersisted(cfg.time);
 
+  const timeScale = resolveTimeScale(cfg.time.timeScale);
+  // 快照恢复时,机器停机期间模拟钟不前进 → 与真实时间产生整段偏差。
+  // timeScale=1 的生产模式下把它对齐回真实时间(阈值可配),否则「它的一天」会永久落后。
+  let resumeSimNow = persisted?.simNow;
+  let driftNote = "";
+  if (resumeSimNow != null && timeScale === 1 && cfg.time.syncOnResume !== false) {
+    const maxDrift = (cfg.time.maxResumeDriftSimMinutes ?? 10) * 60_000;
+    const drift = Date.now() - resumeSimNow;
+    if (Math.abs(drift) > maxDrift) {
+      driftNote = `(模拟钟偏差 ${(drift / 3_600_000).toFixed(2)}h,已对齐真实时间)`;
+      resumeSimNow = Date.now();
+    }
+  }
+
   const clock = new SimClock({
-    // 快照恢复 → 沿用快照时刻;全新启动 → 有 simStart 用它(调试),否则以现实时间为锚
+    // 快照恢复 → 沿用快照时刻(必要时已对齐);全新启动 → 有 simStart 用它(调试),否则以现实时间为锚
     simStart: persisted ? undefined : cfg.time.simStart,
-    resumeSimNow: persisted?.simNow,
-    timeScale: resolveTimeScale(cfg.time.timeScale),
+    resumeSimNow,
+    timeScale,
     tickRealMs: cfg.time.tickRealMs,
   });
   const log = makeLog(clock);
-  log(`watching-bot 启动,timeScale=${clock.timeScale}${persisted ? "(从快照恢复)" : "(全新,以现实时间为锚)"} | 模拟时间 ${fmtSim(clock.simNow())}`);
+  log(
+    `watching-bot 启动,timeScale=${clock.timeScale}${persisted ? "(从快照恢复)" : "(全新,以现实时间为锚)"}` +
+      `${driftNote} | 模拟时间 ${fmtSim(clock.simNow())}`,
+  );
 
   const repo = new Repo(openDb(cfg.memory.dataDir));
   const pruned = repo.pruneHistory();
