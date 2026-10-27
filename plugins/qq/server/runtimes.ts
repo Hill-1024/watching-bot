@@ -102,6 +102,12 @@ export interface LoginEntry {
   hint?: string;
 }
 
+export interface SnowlumaInitialCredentials {
+  webuiUser?: string;
+  webuiPassword?: string;
+  vncPassword?: string;
+}
+
 export interface LoginInfo {
   runtime: RuntimeId;
   displayName: string;
@@ -115,7 +121,11 @@ export interface LoginInfo {
  * 登录信息是「展示抽象」,不要求两套 runtime 的认证方式一致:
  * 页面只消费 entries/instructions,不关心 token 来自 webui.json 还是首次日志。
  */
-export function loginInfoOf(id: RuntimeId, cfg: QqRuntimeConfig): LoginInfo {
+export function loginInfoOf(
+  id: RuntimeId,
+  cfg: QqRuntimeConfig,
+  initial?: SnowlumaInitialCredentials,
+): LoginInfo {
   const port = cfg.hostPorts?.[id] ?? RUNTIMES[id].webui.defaultHostPort;
   const webuiUrl = `http://127.0.0.1:${port}`;
 
@@ -169,10 +179,29 @@ export function loginInfoOf(id: RuntimeId, cfg: QqRuntimeConfig): LoginInfo {
         hint: "OneBot WS 使用该 token;留空表示不校验",
       },
       {
-        label: "WebUI / noVNC 初始口令",
+        label: "WebUI 初始账号",
+        value: initial?.webuiUser,
+        sensitive: false,
+        available: Boolean(initial?.webuiUser),
+        hint: initial?.webuiUser ? undefined : "尚未从容器首次启动日志中解析到(日志轮转后不可恢复,可重建容器重新生成)",
+      },
+      {
+        label: "WebUI 初始密码",
+        value: initial?.webuiPassword,
         sensitive: true,
-        available: false,
-        hint: "官方部署下初始口令可能只出现在首次启动日志中;请从 supervisor 日志获取",
+        available: Boolean(initial?.webuiPassword),
+        hint: initial?.webuiPassword
+          ? "仅首次登录有效;若已在 WebUI 改过密码,以改后的为准"
+          : "初始密码只在容器首次启动日志里出现一次;尚未解析到(可重建容器重新生成)",
+      },
+      {
+        label: "noVNC 密码",
+        value: initial?.vncPassword,
+        sensitive: true,
+        available: Boolean(initial?.vncPassword),
+        hint: initial?.vncPassword
+          ? undefined
+          : "尚未从容器首次启动日志中解析到;卷还在时密码不变,重建容器会重新生成",
       },
     ],
     instructions: [

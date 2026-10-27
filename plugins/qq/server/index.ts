@@ -9,6 +9,7 @@ import {
   oneBotUrl,
   type QqRuntimeConfig,
   type RuntimeId,
+  type SnowlumaInitialCredentials,
 } from "./runtimes.js";
 
 /**
@@ -139,7 +140,7 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
         login: login ? { userId: login.userId, nickname: login.nickname } : null,
       },
       runtimes: await describeRuntimes(),
-      login: loginInfoOf(selected, cfg),
+      login: selected === "snowluma" ? loginInfoOf(selected, cfg, await snowlumaInitialCredentials()) : loginInfoOf(selected, cfg),
       lastError,
     };
   };
@@ -148,6 +149,40 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
     await disconnect();
     await connect(selected);
     lastError = null;
+  };
+
+  /**
+   * SnowLuma 的 WebUI 初始账密与 noVNC 密码只在容器首次启动日志里打印一次。
+   * 这里从 supervisor 日志解析并做 60 秒节流缓存;容器重启(restart)后置空重取。
+   */
+  let initialCredentials: SnowlumaInitialCredentials | null = null;
+  let initialCredentialsAt = 0;
+  const lastMatch = (text: string, re: RegExp): RegExpExecArray | null => {
+    let out: RegExpExecArray | null = null;
+    for (let m = re.exec(text); m; m = re.exec(text)) out = m;
+    return out;
+  };
+  const snowlumaInitialCredentials = async (): Promise<SnowlumaInitialCredentials> => {
+    if (initialCredentials && Date.now() - initialCredentialsAt < 60_000) return initialCredentials;
+    const out: SnowlumaInitialCredentials = {};
+    try {
+      if (ctx.supervisor) {
+        const text = await ctx.supervisor.logs("snowluma", 4000);
+        // 容器可能多次重启、每次都打印一条初始凭据:取最后一次(当前生效)的
+        const cred = lastMatch(text, /initial credentials:\s*user=(\S+)\s+password=(\S+)/g);
+        if (cred) {
+          out.webuiUser = cred[1];
+          out.webuiPassword = cred[2];
+        }
+        const vnc = lastMatch(text, /(?:远程桌面密码|remote desktop password):\s*(\S+)/g);
+        if (vnc) out.vncPassword = vnc[1];
+      }
+    } catch (err) {
+      ctx.logger.warn(`解析 SnowLuma 初始凭据失败: ${String(err)}`);
+    }
+    initialCredentials = out;
+    initialCredentialsAt = Date.now();
+    return out;
   };
 
   const switchRuntime = async (target: RuntimeId): Promise<PluginResponse> => {
@@ -227,6 +262,7 @@ export default async function start(ctx: PluginContext): Promise<RunningPlugin> 
     const sup = supervisorAvailable() ? ctx.supervisor : undefined;
     try {
       if (sup) await sup.restart(selected);
+      initialCredentials = null; // 容器重启后凭据可能变化,强制重新解析
       await reconnect();
       return { body: { ok: true, state: await state() } };
     } catch (err) {
