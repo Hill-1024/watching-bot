@@ -3,7 +3,7 @@ import type { StateRules, StateThresholds, StateVarDef } from "../config.js";
 /** 配置驱动的状态变量集合(v1:疲惫/心情/烦躁/压力/社交电量,可增删) */
 export type Vars = Record<string, number>;
 
-export type Phase = "awake" | "sleep_transition" | "asleep" | "waking";
+export type Phase = "awake" | "resting" | "sleep_transition" | "asleep" | "waking";
 
 export interface StateSnapshot {
   vars: Vars;

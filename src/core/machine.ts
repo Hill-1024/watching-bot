@@ -3,7 +3,7 @@ import type { Repo } from "../store/db.js";
 import type { EnvKind, FeelingKind } from "./copy.js";
 import type { Emitter, CoreEvent } from "./events.js";
 
-export type MachinePhase = "awake" | "sleep_transition" | "asleep" | "waking";
+export type MachinePhase = "awake" | "resting" | "sleep_transition" | "asleep" | "waking";
 
 export interface MachineHost {
   simNow(): number;
@@ -38,6 +38,9 @@ export class SleepMachine {
   snoozeCount = 0;
   /** 最近一次唤醒信号的来源(alarm/storm/…),loop 判定赖床后续用 */
   lastWakeSource = "";
+  /** 躺下放空(resting)的起点与累计次数,用于文案差异与恢复节奏 */
+  restStartedSim: number | null = null;
+  restAttempts = 0;
   private sleepLogId: number | null = null;
   private sleepReason = "";
   private wakeSource = "";
@@ -73,17 +76,33 @@ export class SleepMachine {
     this.host.events.emit({ type: "phase_changed", phase: this.phase, reason });
   }
 
-  /** 自愿入睡;不困时睡不着;正处于被叫醒的犹豫期则等价于赖床 */
+  /**
+   * 自愿入睡是一次「尝试」,不是系统判定的许可。
+   * - 够困 → 进入入睡流程(睡眠期归并 → asleep);
+   * - 不够困 → 躺下放空(resting):安静恢复,但不视为睡着。
+   *   真实的人不困时躺下也是辗转反侧,模型自己从体感里读出「还睡不着」,
+   *   想等困意、想起来做事、或者继续躺着,都由它决定。
+   */
   async sleepVoluntarily(): Promise<string> {
     if (this.phase === "waking") {
       this.settleBackToSleep();
       return "你迷迷糊糊地嘟囔了一句,翻了个身继续睡。";
     }
-    if (this.phase !== "awake") return "你已经睡着了。";
-    if (this.host.fatigueNow() < this.host.minFatigueToSleep()) {
-      // 入睡被拒 ≠ 可以马上再试:安排一个合理的下次尝试时刻,防止模型每几秒重试一次把状态打爆
-      this.host.scheduleKickIn(45 * MIN, "sleep-retry");
-      return "你躺下试了试,但一点都不困——脑子清醒得像刚充满电。睡不着,起来吧,过会儿再说。(已为你安排 45 分钟后再考虑入睡,这段时间去做点别的或放空。)";
+    if (this.phase === "asleep" || this.phase === "sleep_transition") return "你已经睡着了。";
+    if (this.phase === "resting") return "你已经躺着了,脑子还在慢慢转,先别急着再躺一次。";
+
+    const fatigue = this.host.fatigueNow();
+    if (fatigue < this.host.minFatigueToSleep()) {
+      this.phase = "resting";
+      this.restStartedSim = this.host.simNow();
+      this.restAttempts += 1;
+      this.host.events.emit({ type: "phase_changed", phase: this.phase, reason: `rest:${this.restAttempts}` });
+      const variants = [
+        "你躺下闭上眼,但脑子还在转:今天没说完的话、没回的消息,都在眼前过。身体不累,意识清醒得很。先这么躺着吧,躺一会儿再说。",
+        "被子拉好,眼睛闭上,可一点睡意都没有。翻了个身,索性发会儿呆。",
+        "你试着睡,但脑子停不下来。不困就是不困,躺着也挺好。",
+      ];
+      return variants[(this.restAttempts - 1) % variants.length]!;
     }
     await this.requestSleep("voluntary");
     return "你放下一切,钻进了被窝。意识慢慢沉入黑暗。";
@@ -146,6 +165,7 @@ export class SleepMachine {
     const slept = this.sleepStartedSim != null ? now - this.sleepStartedSim : 0;
     this.phase = "awake";
     this.sleepStartedSim = null;
+    this.restStartedSim = null;
     this.wakeSource = "";
     // 没睡够就醒 → 继续困意注入
     if (this.host.fatigueNow() >= this.host.drowsyOnWakeThreshold()) {

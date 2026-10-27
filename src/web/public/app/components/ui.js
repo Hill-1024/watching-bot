@@ -24,6 +24,7 @@ export const Icon = {
 
 const PHASE_LABEL = {
   awake: "醒着",
+  resting: "躺着放空",
   asleep: "睡着",
   sleep_transition: "正在入睡",
   waking: "被吵醒,犹豫中",

@@ -184,8 +184,8 @@ describe("infinite loop 感知调度", () => {
       expect(h.timers.size).toBe(0);
       h.agent.state.isStreaming = false;
       (h.core as unknown as { onRunEnd(reason: string): void }).onRunEnd("turn");
-      // 无限循环:这一轮结束立刻排下一轮,中间没有心跳间隔
-      expect([...h.timers.values()][0]?.at).toBe(0);
+      // 这一轮什么都没做 → 按空转退避节奏排下一次(首轮 3 模拟分),而不是立刻再来
+      expect([...h.timers.values()][0]?.at).toBe(3 * MIN);
     } finally {
       h.storage.close();
     }

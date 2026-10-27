@@ -28,7 +28,13 @@ export function applyStateEvent(
   switch (event.type) {
     case "tick": {
       const dh = event.simDeltaMs / HOUR;
-      if (prev.phase !== "awake") {
+      if (prev.phase === "resting") {
+        // 躺下放空:缓慢恢复,但不算睡着(不会像睡眠那样把疲劳清零)
+        set("fatigue", -r.fatigueRecoveryPerSimHour * 0.4 * dh);
+        set("annoyance", -r.annoyanceDecayPerSimHour * 2 * dh);
+        set("stress", -r.stressDecayPerSimHour * dh);
+        set("social", r.socialRecoveryPerSimHourAlone * dh);
+      } else if (prev.phase !== "awake") {
         // 睡着/转换中/半梦半醒:都按恢复算
         set("fatigue", -r.fatigueRecoveryPerSimHour * dh);
         set("annoyance", -r.annoyanceDecayPerSimHour * 3 * dh);

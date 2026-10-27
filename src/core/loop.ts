@@ -59,6 +59,8 @@ export class AgentCore implements CoreCommands, MachineHost {
   private lastHistorySampleSim = 0;
   private lastTickSim: number | null = null;
   private lastAlarmNote: string | undefined;
+  /** 连续「什么都没做」的 run 次数,用于空转退避节奏 */
+  private emptyRunStreak = 0;
   private readonly log: (msg: string) => void;
 
   private stateCtx: StateContext;
@@ -387,11 +389,21 @@ export class AgentCore implements CoreCommands, MachineHost {
 
     const lastMsgs = agentTailTexts(this.deps.agent);
     this.events.emit({ type: "run_end", hadToolCalls: lastMsgs.toolCalls > 0, textLen: lastMsgs.textLen });
-    // 模型自己 wait(N) 时尊重那个时刻;否则无限循环立刻继续,不插入心跳间隔
+    // 模型自己 wait(N) 时尊重那个时刻;否则按「这次 run 是否真的做了事」决定下一次间隔。
     if (this.nextKickSim != null) {
       this.log(`[loop] 已有待触发(如 wait),到点再继续`);
       return;
     }
+
+    // 空转退避:连着几轮什么都没做,就把下一次决策的间隔拉长(3 → 6 → 12 → 24 模拟分,上限 1h)。
+    // 这是无限循环的「无事件也活着」机制,而不是替模型决定行为:有工具调用/有话要说时仍立即继续。
+    if (lastMsgs.toolCalls === 0 && lastMsgs.textLen < 8) {
+      this.emptyRunStreak += 1;
+      const minutes = Math.min(60, 3 * Math.pow(2, this.emptyRunStreak - 1));
+      this.scheduleKickIn(minutes * MIN, `idle:${minutes}m`);
+      return;
+    }
+    this.emptyRunStreak = 0;
     this.scheduleKickAt(this.clock.simNow(), "continue");
   }
 
