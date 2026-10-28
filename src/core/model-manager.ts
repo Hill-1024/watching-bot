@@ -68,6 +68,8 @@ export interface ModelView {
   warning: string | null;
   /** 覆盖层里原样保存的 baseUrl(可能与生效值不同,用于面板回显与一键修正) */
   configuredBaseUrl: string;
+  /** 插件设置的运行时路由覆盖(如 RTK proxy);null 表示未启用 */
+  routeBaseUrl: string | null;
 }
 
 /**
@@ -78,6 +80,8 @@ export class ModelManager {
   private base: ModelConfig;
   private override: ModelOverride = {};
   private handles: LlmHandles | null = null;
+  /** 运行时路由覆盖(插件专用,不写盘):如 RTK proxy 启用期间把请求转到本地代理 */
+  private routeOverride: string | null = null;
   private readonly overridePath: string;
 
   constructor(
@@ -105,7 +109,7 @@ export class ModelManager {
     return {
       provider: this.override.provider ?? this.base.provider,
       model: this.override.model ?? this.base.model,
-      baseUrl: this.override.baseUrl ?? this.base.baseUrl,
+      baseUrl: this.routeOverride ?? this.override.baseUrl ?? this.base.baseUrl,
       apiKey: this.override.apiKey,
       apiKeyEnv: this.base.apiKeyEnv,
       contextWindow: this.override.contextWindow || this.base.contextWindow,
@@ -195,7 +199,34 @@ export class ModelManager {
 
   /** 当前配置的问题提示(baseUrl 回环等在容器里不可用的值);无问题返回 null */
   warning(): string | null {
-    return gatewayHint(this.override.baseUrl ?? this.base.baseUrl);
+    return gatewayHint(this.routeOverride ?? this.override.baseUrl ?? this.base.baseUrl);
+  }
+
+  /** 运行时路由覆盖(插件用):设置后立即重建句柄,失败自动回滚;null 表示恢复原端点 */
+  setRouteOverride(baseUrl: string | null): { ok: boolean; error?: string } {
+    if (this.opts.faux) return { ok: false, error: "faux 模式下不可重定向模型请求" };
+    const next = baseUrl?.trim() || null;
+    // 与手动配置同一套规则:容器内回环地址连不到宿主机
+    const hint = next ? gatewayHint(next) : null;
+    if (hint) return { ok: false, error: hint };
+    const prev = this.routeOverride;
+    this.routeOverride = next;
+    try {
+      this.rebuild();
+      return { ok: true };
+    } catch (err) {
+      this.routeOverride = prev;
+      try {
+        this.rebuild();
+      } catch {
+        // 回滚也失败:保留错误信息,由调用方决定是否停用插件
+      }
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  routeBaseUrl(): string | null {
+    return this.routeOverride;
   }
 
   view(): ModelView {
@@ -214,6 +245,7 @@ export class ModelManager {
       apiKeyMasked: key ? `${key.slice(0, 3)}••••${key.slice(-4)}` : "",
       warning: this.warning(),
       configuredBaseUrl: this.override.baseUrl ?? "",
+      routeBaseUrl: this.routeOverride,
     };
   }
 

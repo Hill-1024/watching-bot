@@ -78,9 +78,9 @@ interface PerceptionEvent {
 | 时钟 | `src/core/clock.ts` | `simNow = simStart + 真实流逝 × timeScale`;所有状态动力学/闹钟/wait 按模拟时间;支持面板热调倍率(重定基不跳变)。tick 每 `tickRealMs` 触发一次,是整个系统的心跳 |
 | 注入器 | `src/core/inject.ts` | 体感(kind+tier)→伪造 assistant 内心独白 `<feeling>…</feeling>`;环境事件→`[环境]` user 旁白。注入先入队,loop 在 kick 前 flush;同 kind 环境感知去重防灌水 |
 | 文案表 | `src/core/copy.ts` | 状态区间 → 主观描述的映射。**状态数值永不进入提示词**(tests/state-engine.test.ts 有专门断言) |
-| Agent 装配 | `src/core/agent.ts` | pi Agent 构造:leading system 消息 = persona.md + 命名 sections(memory/capabilities/instructions,可热更新);`transformContext` 接 pi 的 compaction。上下文窗口是 getter,跟随模型热切换后的实际 `contextWindow` |
+| Agent 装配 | `src/core/agent.ts` | pi Agent 构造:leading system 消息 = persona.md + 命名 sections(memory/capabilities/instructions,可热更新);`transformContext` 做三层上下文治理(见下)。上下文窗口是 getter,跟随模型热切换后的实际 `contextWindow` |
 | 内置工具 | `src/core/tools.ts` | `wait`/`sleep`/`wake_up`/`set_alarm`/`cancel_alarm`/`what_time_is_it` |
-| 状态机 | `src/core/machine.ts` | `awake / sleep_transition / asleep / waking` 四态;强制入睡、系统级唤醒(自然醒/硬上限)不经模型,闹钟/风暴打断进 `waking` 由模型决定 |
+| 状态机 | `src/core/machine.ts` | `awake / resting / sleep_transition / asleep / waking` 五态;强制入睡、系统级唤醒(自然醒/硬上限)不经模型,闹钟/风暴打断进 `waking` 由模型决定 |
 | 循环 | `src/core/loop.ts` | orchestrator,见下 |
 
 ## 无限循环:kick 模型
@@ -95,10 +95,18 @@ orchestrator 是**唯一决定「何时调用 LLM」的角色**:
 ```
 
 - `wait(minutes)` 是终止性工具:结束当前 run 并挂起,loop 按模拟时间排程下一次 kick —— 模型自己决定放空多久;等待期间被@、被戳或收到私聊会打断,群里的普通闲聊只进未读不打扰;
-- 空响应(没调工具且文本 <8 字符)→ 心跳间隔指数退避(30→60→…→180 模拟分),防烧钱空转;
+- 空响应(没调工具且文本 <8 字符)→ 下一次 kick 按 3→6→12→24…模拟分指数退避(上限 60),防烧钱空转;
 - run 进行中来触发 → `agent.steer()` 注入,不打断当前 run。
 
 pi 的角色:agent loop、Context(可拼接任意消息,混合注入因此可行)、`steer` 队列、`transformContext` 钩子、faux provider(测试),模型网关见 `docs/configuration.md` 的「模型接入」。
+
+### 上下文治理(节点数 / 体积 / 缓存)
+
+1. **协议级裁剪**(`trimForProtocol`):网关常限制请求体 JSON 节点数(如 32768),几千条历史会直接 400,而 token 估算发现不了。按消息条数硬上限裁剪(`max(160, hotTailMessages×4)`),在 user 消息边界切、保留开头 system,并插入一条省略说明。
+2. **工具结果分级裁剪**(`trimOldToolResults`):最近 8 条完整保留;8–40 条文本截到 4k 字符(图片保留);更早的截到 600 字符、图片换成 `[图片内容已省略]`。只改内容不改角色/顺序,不破坏 toolCall ↔ toolResult 配对。
+3. **缓存命中优化**:裁剪切点按 50 条块对齐 —— 每来一条新消息就移动切点会让 prompt cache 前缀全部失效;system sections 更新以「尾部新 system 消息」追加,不改写开头人设;请求不携带 timestamp。
+
+实测:802 条 / 642KB 的历史在请求前被裁到 199 条 / 116KB,缓存命中率保持在 99% 以上。
 
 ## 醒睡状态机
 

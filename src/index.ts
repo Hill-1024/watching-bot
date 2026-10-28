@@ -156,6 +156,9 @@ async function main(): Promise<void> {
     supervisorUrl && supervisorToken ? new SupervisorClient(supervisorUrl, supervisorToken) : undefined;
   if (!supervisor) log("[plugins] 未配置 runtime supervisor,QQ runtime 只能本地直连");
 
+  // 插件请求的模型路由覆盖(如 RTK proxy)要在句柄重建后热替换到 agent;
+  // agent 在插件之后创建,这里用 late-bound 回调衔接。
+  const modelApplyRef: { current: (() => void) | null } = { current: null };
   const plugins = new PluginHost({
     pluginsRoot: process.env.WATCHING_BOT_PLUGINS_DIR ?? "plugins",
     dataDir: cfg.memory.dataDir,
@@ -164,6 +167,17 @@ async function main(): Promise<void> {
     moduleConfigs,
     supervisor,
     reservedToolNames: coreTools.map((t) => t.name),
+    llmRouting: {
+      currentBaseUrl: () => modelManager.view().baseUrl,
+      setRouteOverride: (baseUrl) => {
+        const r = modelManager.setRouteOverride(baseUrl);
+        if (r.ok) {
+          modelApplyRef.current?.();
+          log(`[model] 路由覆盖 ${baseUrl ? `→ ${baseUrl}` : "已清除"}`);
+        }
+        return r;
+      },
+    },
     publish: (topic, data) => {
       // 插件状态列表直接随事件下发,省一次往返。
       // 带 data 的事件(切换进度)必须立刻到,不能被窗口合并。
@@ -237,6 +251,13 @@ async function main(): Promise<void> {
     log,
   });
   agent.state.thinkingLevel = modelManager.thinkingLevel();
+  // 插件触发路由覆盖后,把新句柄热替换到正在跑的 agent
+  modelApplyRef.current = () => {
+    const h = modelManager.current;
+    agent.state.model = h.model as never;
+    agent.streamFunction = h.streamFn;
+    agent.state.thinkingLevel = modelManager.thinkingLevel();
+  };
 
   let pushStatus: (immediate?: boolean) => void = () => {};
 

@@ -39,6 +39,7 @@ const ManifestSchema = Type.Object(
           Type.Literal("storage"),
           Type.Literal("realtime"),
           Type.Literal("config"),
+          Type.Literal("llm-routing"),
         ]),
       ),
     ),

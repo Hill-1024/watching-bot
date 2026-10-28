@@ -12,6 +12,7 @@ import type {
   PluginRequest,
   PluginResponse,
   PluginView,
+  LlmRoutingControl,
   RestrictedSupervisorClient,
   RunningPlugin,
 } from "./types.js";
@@ -25,6 +26,8 @@ export interface PluginHostDeps {
   log?: (msg: string) => void;
   moduleConfigs?: Record<string, unknown>;
   supervisor?: RestrictedSupervisorClient;
+  /** LLM 路由控制;按 manifest 的 llm-routing 权限下发给插件 */
+  llmRouting?: LlmRoutingControl;
   /** 核心工具名:插件不得覆盖 */
   reservedToolNames?: string[];
   /** 事件推送(面板无需轮询);data 会原样进 SSE,供进度这种必须即时的信号使用 */
@@ -199,6 +202,7 @@ export class PluginHost implements ModuleBus {
           for (const cb of this.perceptionCbs) cb(e);
         },
         supervisor: d.manifest.runtimeAccess?.length ? this.deps.supervisor : undefined,
+        llm: permissionsOf(d.manifest).includes("llm-routing") ? this.deps.llmRouting : undefined,
         publish: (data?: unknown) => this.deps.publish?.(`plugin:${id}`, data),
         publishCatalog: () => this.deps.publish?.("plugins"),
       };

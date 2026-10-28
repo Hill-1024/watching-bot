@@ -12,7 +12,7 @@ import type { PerceptionEvent } from "../bus/types.js";
  * 约束宿主接口(例如只能操作白名单 runtime),不是沙箱。
  */
 
-export type PluginPermission = "tools" | "perception" | "storage" | "realtime" | "config";
+export type PluginPermission = "tools" | "perception" | "storage" | "realtime" | "config" | "llm-routing";
 
 export type RuntimeId = "napcat" | "snowluma";
 
@@ -101,10 +101,23 @@ export interface PluginContext {
   storage: PluginStorage;
   emitPerception(event: PerceptionEvent): void;
   supervisor?: RestrictedSupervisorClient;
+  /** LLM 路由控制(仅声明 llm-routing 权限的插件可见);用于把模型请求临时转到本地代理 */
+  llm?: LlmRoutingControl;
   /** 通知面板本插件状态变化(topic 固定为 plugin:<id>,插件不能影响核心 topic) */
   publish?(data?: unknown): void;
   /** 摘要/工具变化后刷新模块总览,不改其它页面 */
   publishCatalog?(): void;
+}
+
+/**
+ * LLM 路由控制:只允许「临时改写上游 baseUrl」这一种能力,不能读 key、不能改模型/provider。
+ * 典型用途是可选插件(如 RTK proxy)在启用期间把请求接到本地优化代理,禁用即恢复。
+ */
+export interface LlmRoutingControl {
+  /** 当前实际生效的上游地址(含已有 override) */
+  currentBaseUrl(): string;
+  /** 设置/清除路由覆盖(不写盘;失败返回 error,调用方应回退) */
+  setRouteOverride(baseUrl: string | null): { ok: boolean; error?: string };
 }
 
 export interface PluginRequest {
