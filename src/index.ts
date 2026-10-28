@@ -245,8 +245,9 @@ async function main(): Promise<void> {
       (m) => (m as { role?: string }).role !== "system",
     ),
     loopCfg: cfg.loop,
-    // 跟随模型的实际窗口,而不是 config 里的基础值;否则切到 1M 模型仍按 128k 反复压缩
-    contextWindow: () => modelManager.contextWindow(),
+    // 跟随模型的实际窗口,但设一个生效上限:compaction 阈值按窗口比例算,
+    // 256k 窗口会让它在本机网关的请求体限制之前从不触发。
+    contextWindow: () => Math.min(modelManager.contextWindow(), cfg.loop.contextWindowCap ?? 64_000),
     summarize,
     log,
   });

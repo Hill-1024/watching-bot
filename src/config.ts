@@ -75,6 +75,8 @@ export interface LoopConfig {
   emptyBackoffBaseSimMinutes: number;
   emptyBackoffMaxSimMinutes: number;
   perceptionFlushDelayMs: number;
+  /** 生效上下文窗口上限(默认 64000):让 pi compaction 在网关节点/体积限制前触发 */
+  contextWindowCap?: number;
   hotTailMessages: number;
 }
 

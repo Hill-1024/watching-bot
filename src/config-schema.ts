@@ -79,6 +79,7 @@ const LoopSchema = Type.Object({
   emptyBackoffMaxSimMinutes: Type.Number({ exclusiveMinimum: 0 }),
   perceptionFlushDelayMs: NonNeg,
   hotTailMessages: PosInt,
+  contextWindowCap: Type.Optional(PosInt),
 });
 
 const MemorySchema = Type.Object({

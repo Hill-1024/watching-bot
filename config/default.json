@@ -117,7 +117,8 @@
     "emptyBackoffBaseSimMinutes": 30,
     "emptyBackoffMaxSimMinutes": 180,
     "perceptionFlushDelayMs": 4000,
-    "hotTailMessages": 40
+    "hotTailMessages": 40,
+    "contextWindowCap": 64000
   },
   "memory": {
     "dataDir": "data",
