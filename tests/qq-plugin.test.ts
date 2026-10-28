@@ -59,7 +59,7 @@ describe("QQ 单插件 · 一份 OneBot 能力", () => {
       );
       await snowluma.connect(
         {
-          url: oneBotUrl("snowluma", { supervisorUrl: "http://supervisor:8099" }),
+          url: oneBotUrl("snowluma", {}),
           dbPath: join(base, "snowluma.db"),
           memeDir: join(base, "snowluma-memes"),
         },
@@ -76,11 +76,11 @@ describe("QQ 单插件 · 一份 OneBot 能力", () => {
     }
   });
 
-  it("同一账号共用消息库与表情包目录,登录卷才按 runtime 分离", () => {
+  it("同一账号共用消息库与表情包目录,OneBot 端点按配置解析", () => {
     // 共享数据路径是插件配置的默认值,不随 runtime 变化
     expect(oneBotUrl("napcat", { napcatUrl: "ws://127.0.0.1:3001" })).toBe("ws://127.0.0.1:3001");
-    expect(oneBotUrl("snowluma", { supervisorUrl: "http://supervisor:8099" })).toBe("ws://snowluma:3001");
-    expect(oneBotUrl("napcat", { supervisorUrl: "http://supervisor:8099" })).toBe("ws://napcat:3001");
+    expect(oneBotUrl("snowluma", { snowlumaUrl: "ws://127.0.0.1:3002" })).toBe("ws://127.0.0.1:3002");
+    expect(oneBotUrl("napcat", {})).toBe("ws://127.0.0.1:3001");
     expect(oneBotToken("snowluma", { snowlumaToken: "s3cret" })).toBe("s3cret");
   });
 
@@ -92,6 +92,6 @@ describe("QQ 单插件 · 一份 OneBot 能力", () => {
     expect(snowluma.webuiUrl).toContain("5099");
     expect(snowluma.remoteDesktopUrl).toContain("6081");
     expect(snowluma.instructions.join(" ")).toContain("扫码");
-    expect(RUNTIMES.snowluma.securityNotes.join(" ")).toContain("SYS_PTRACE");
+    expect(RUNTIMES.snowluma.securityNotes.join(" ")).toContain("不要暴露到公网");
   });
 });

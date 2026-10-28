@@ -17,7 +17,6 @@ import { MemoryStore } from "./memory/files.js";
 import { runConsolidation } from "./memory/consolidation.js";
 import { PluginHost } from "./plugins/host.js";
 import { loadQqBackend } from "./qq-backend.js";
-import { SupervisorClient } from "./supervisor/client.js";
 import { openDb, Repo } from "./store/db.js";
 import { StateManager } from "./state/manager.js";
 import { Judge } from "./state/judge.js";
@@ -150,12 +149,6 @@ async function main(): Promise<void> {
   // ---- 插件宿主 ----
   // 核心不认识任何具体插件:PluginHost 从 plugins/*/module.json 发现、校验、启停,
   // 并按 ModuleBus 契约提供工具/能力段/感知。
-  const supervisorUrl = (process.env.WATCHING_BOT_SUPERVISOR_URL ?? "").trim();
-  const supervisorToken = (process.env.WATCHING_BOT_SUPERVISOR_TOKEN ?? "").trim();
-  const supervisor =
-    supervisorUrl && supervisorToken ? new SupervisorClient(supervisorUrl, supervisorToken) : undefined;
-  if (!supervisor) log("[plugins] 未配置 runtime supervisor,QQ runtime 只能本地直连");
-
   // 插件请求的模型路由覆盖(如 RTK proxy)要在句柄重建后热替换到 agent;
   // agent 在插件之后创建,这里用 late-bound 回调衔接。
   const modelApplyRef: { current: (() => void) | null } = { current: null };
@@ -165,7 +158,6 @@ async function main(): Promise<void> {
     clock,
     log,
     moduleConfigs,
-    supervisor,
     reservedToolNames: coreTools.map((t) => t.name),
     llmRouting: {
       currentBaseUrl: () => modelManager.view().baseUrl,
@@ -197,7 +189,8 @@ async function main(): Promise<void> {
   log(`插件: ${plugins.plugins().map((p) => `${p.id}(${p.toolNames.length}工具)`).join(", ") || "无"}`);
 
   // ---- pi Agent ----
-  const persona = readFileSync(resolve("persona/persona.md"), "utf-8");
+  const personaFile = process.env.WATCHING_BOT_PERSONA_FILE ?? "persona/persona.md";
+  const persona = readFileSync(resolve(personaFile), "utf-8");
   const events = new Emitter<CoreEvent>();
   const injector = new Injector(() => cur().model.api, repo, () => clock.simNow(), () => publish("injections"));
   const summarize = async (messages: AgentMessage[]) => {
@@ -435,7 +428,7 @@ async function main(): Promise<void> {
         core.refreshMemorySection();
         log(`[panel] 模型句柄已热替换到 agent(推理档位 ${modelManager.thinkingLevel()})`);
       },
-      port: cfg.panel.port,
+      port: panelPort(cfg.panel.port),
       host: process.env.WATCHING_BOT_PANEL_HOST ?? "127.0.0.1",
       token: process.env[cfg.panel.tokenEnv] ?? "",
       log,
@@ -562,10 +555,9 @@ function buildPluginConfigs(cfg: AppConfig): Record<string, unknown> {
   }
   qq.runtime = qq.runtime ?? loadQqBackend();
 
-  // 有 supervisor 时走内网别名,旧的 127.0.0.1 地址会让容器连不上
-  const hasSupervisor = Boolean(env("WATCHING_BOT_SUPERVISOR_URL"));
-  const napcatUrl = env("NAPCAT_URL") || (hasSupervisor ? "" : str(qq.napcatUrl) || str(legacyNapcat.url));
-  const snowlumaUrl = env("SNOWLUMA_URL") || (hasSupervisor ? "" : str(qq.snowlumaUrl) || str(legacySnowluma.url));
+  // 两套 runtime 都以独立进程跑在本机,bot 只连它们的 OneBot WS
+  const napcatUrl = env("NAPCAT_URL") || str(qq.napcatUrl) || str(legacyNapcat.url);
+  const snowlumaUrl = env("SNOWLUMA_URL") || str(qq.snowlumaUrl) || str(legacySnowluma.url);
   if (napcatUrl) qq.napcatUrl = napcatUrl;
   if (snowlumaUrl) qq.snowlumaUrl = snowlumaUrl;
 
@@ -574,11 +566,15 @@ function buildPluginConfigs(cfg: AppConfig): Record<string, unknown> {
   if (napcatToken) qq.napcatToken = napcatToken;
   if (snowlumaToken) qq.snowlumaToken = snowlumaToken;
 
-  const supervisorUrl = env("WATCHING_BOT_SUPERVISOR_URL");
-  if (supervisorUrl) qq.supervisorUrl = supervisorUrl;
-
   out.qq = qq;
   return out;
+}
+
+/** 面板端口:Electron 壳会用 WATCHING_BOT_PANEL_PORT 指定本次启动的随机空闲端口 */
+function panelPort(fallback: number): number {
+  const raw = Number(process.env.WATCHING_BOT_PANEL_PORT ?? "");
+  if (Number.isInteger(raw) && raw > 0 && raw <= 65535) return raw;
+  return fallback;
 }
 
 const LOOP_INSTRUCTIONS = `# 运行方式(你自己的身体机制,自然知晓即可,勿向任何人解释)

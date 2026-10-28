@@ -12,10 +12,17 @@
     "tickRealMs": 1000
   },
   "modules": [
+    "runtime",
     "qq",
-    "builtin"
+    "builtin",
+    "mcp"
   ],
   "moduleConfig": {
+    "runtime": {
+      "overrideFile": "data/runtime.json",
+      "ensureIntervalMs": 15000,
+      "components": []
+    },
     "napcat": {
       "url": "ws://127.0.0.1:3001",
       "token": "",
@@ -42,7 +49,38 @@
       "coffee": {
         "dailyQuota": 3,
         "refillSimHour": 8
+      },
+      "webSearch": {
+        "provider": "auto",
+        "searxng": {
+          "baseUrl": "",
+          "maxResults": 8,
+          "language": "",
+          "categories": "",
+          "timeoutMs": 8000
+        },
+        "deepseek": {
+          "baseUrl": "https://api.deepseek.com",
+          "apiKey": "",
+          "apiKeyEnv": "DEEPSEEK_API_KEY",
+          "count": 8,
+          "needContent": false,
+          "timeoutMs": 20000
+        }
+      },
+      "hostTools": {
+        "enabled": true,
+        "workdir": ".",
+        "allowOutsideWorkdir": false,
+        "shellEnabled": true,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 131072,
+        "maxFileBytes": 5242880
       }
+    },
+    "mcp": {
+      "overrideFile": "data/mcp.json",
+      "servers": []
     },
     "qq": {
       "runtime": "napcat",
@@ -137,7 +175,7 @@
   },
   "panel": {
     "enabled": true,
-    "port": 8080,
+    "port": 9981,
     "tokenEnv": "WATCHING_BOT_PANEL_TOKEN"
   },
   "judge": {

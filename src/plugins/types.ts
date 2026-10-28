@@ -14,8 +14,6 @@ import type { PerceptionEvent } from "../bus/types.js";
 
 export type PluginPermission = "tools" | "perception" | "storage" | "realtime" | "config" | "llm-routing";
 
-export type RuntimeId = "napcat" | "snowluma";
-
 export interface PluginPanelDescriptor {
   /** 相对插件目录的入口(浏览器 ESM,导出 Vue defineComponent) */
   entry: string;
@@ -37,8 +35,6 @@ export interface PluginManifest {
   configSchema?: string;
   panel?: PluginPanelDescriptor;
   permissions?: PluginPermission[];
-  /** QQ 类插件可操作的白名单 runtime;只允许注册表 ID,不能传镜像/命令/路径 */
-  runtimeAccess?: RuntimeId[];
 }
 
 export type PluginHealthStatus = "ready" | "degraded" | "failed";
@@ -62,32 +58,6 @@ export interface PluginStorage {
   all(): Record<string, unknown>;
 }
 
-/** 受限 supervisor 客户端:插件只能按 runtime ID 操作,不能直接碰 Docker */
-export interface RestrictedSupervisorClient {
-  list(): Promise<RuntimeStatusView[]>;
-  inspect(id: RuntimeId): Promise<RuntimeStatusView>;
-  install(id: RuntimeId): Promise<RuntimeStatusView>;
-  start(id: RuntimeId): Promise<RuntimeStatusView>;
-  stop(id: RuntimeId): Promise<RuntimeStatusView>;
-  restart(id: RuntimeId): Promise<RuntimeStatusView>;
-  recreate(id: RuntimeId, settings?: Record<string, unknown>): Promise<RuntimeStatusView>;
-  logs(id: RuntimeId, tail?: number): Promise<string>;
-  /** 读取 runtime 白名单内的配置文件(如 SnowLuma 的 onebot.json / vnc-password) */
-  readFile(id: RuntimeId, key: string): Promise<string>;
-}
-
-export interface RuntimeStatusView {
-  id: RuntimeId;
-  install: "not_installed" | "pulling" | "installed" | "failed";
-  process: "stopped" | "starting" | "running" | "restarting" | "error";
-  image: string;
-  containerName: string;
-  hostPorts: Record<string, number>;
-  health?: string;
-  lastError?: string;
-  operation?: { id: string; stage: string; progress?: number };
-}
-
 export interface PluginContext {
   id: string;
   manifest: PluginManifest;
@@ -100,7 +70,6 @@ export interface PluginContext {
   logger: PluginLogger;
   storage: PluginStorage;
   emitPerception(event: PerceptionEvent): void;
-  supervisor?: RestrictedSupervisorClient;
   /** LLM 路由控制(仅声明 llm-routing 权限的插件可见);用于把模型请求临时转到本地代理 */
   llm?: LlmRoutingControl;
   /** 通知面板本插件状态变化(topic 固定为 plugin:<id>,插件不能影响核心 topic) */
@@ -159,7 +128,6 @@ export interface PluginView {
   toolNames: string[];
   panel?: PluginPanelDescriptor & { url?: string };
   permissions: PluginPermission[];
-  runtimeAccess: RuntimeId[];
   error?: string;
 }
 

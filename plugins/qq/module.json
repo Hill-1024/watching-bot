@@ -12,6 +12,5 @@
     "route": "qq",
     "order": 20
   },
-  "permissions": ["tools", "perception", "storage", "realtime"],
-  "runtimeAccess": ["napcat", "snowluma"]
+  "permissions": ["tools", "perception", "storage", "realtime"]
 }

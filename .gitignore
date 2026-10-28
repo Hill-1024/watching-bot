@@ -6,3 +6,9 @@ data/
 .zcode/
 runtime/
 :memory:/
+build/node/
+build/server/
+build/node-tmp/
+build/node-runtime.*
+release/
+logs/

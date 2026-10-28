@@ -1,0 +1,77 @@
+appId: ai.watching.bot
+productName: watching-bot
+copyright: Copyright © 2026 watching-bot
+
+directories:
+  output: release
+  buildResources: build
+
+# Electron 壳本身很小;业务代码在 extraResources 的 server 目录里,由内置 Node 执行
+files:
+  - electron/**/*
+  - package.json
+  - "!node_modules/**/*"
+  - "!src/**/*"
+  - "!plugins/**/*"
+  - "!config/**/*"
+  - "!persona/**/*"
+  - "!data/**/*"
+  - "!runtime/**/*"
+  - "!tests/**/*"
+  - "!tools/**/*"
+  - "!docs/**/*"
+  - "!scripts/**/*"
+
+extraResources:
+  - from: build/server
+    to: server
+  - from: build/node
+    to: runtime/node
+  - from: build/icon.png
+    to: icon.png
+
+asar: true
+npmRebuild: false
+buildDependenciesFromSource: false
+afterPack: scripts/after-pack.cjs
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: watching-bot
+  runAfterFinish: true
+  artifactName: watching-bot-setup-${version}-${arch}.${ext}
+
+portable:
+  artifactName: watching-bot-portable-${version}-${arch}.${ext}
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Utility
+  icon: build/icons
+  executableName: watching-bot
+  artifactName: watching-bot-${version}-${arch}.${ext}
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.utilities
+  icon: build/icon.icns
+  artifactName: watching-bot-${version}-${arch}.${ext}
+
+publish: null

@@ -8,7 +8,6 @@ import {
   type PluginManifest,
   type PluginPanelDescriptor,
   type PluginPermission,
-  type RuntimeId,
 } from "./types.js";
 
 const ID_PATTERN = "^[a-z][a-z0-9-]*$";
@@ -42,9 +41,6 @@ const ManifestSchema = Type.Object(
           Type.Literal("llm-routing"),
         ]),
       ),
-    ),
-    runtimeAccess: Type.Optional(
-      Type.Array(Type.Union([Type.Literal("napcat"), Type.Literal("snowluma")])),
     ),
   },
   { additionalProperties: true },
@@ -149,8 +145,4 @@ export function panelOf(manifest: PluginManifest): PluginPanelDescriptor | undef
 
 export function permissionsOf(manifest: PluginManifest): PluginPermission[] {
   return manifest.permissions ?? [];
-}
-
-export function runtimeAccessOf(manifest: PluginManifest): RuntimeId[] {
-  return manifest.runtimeAccess ?? [];
 }

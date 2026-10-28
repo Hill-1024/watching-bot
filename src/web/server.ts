@@ -50,7 +50,7 @@ export interface PanelDeps {
   /** 面板切换模型后,把新句柄热替换到 pi Agent(在 index.ts 闭包里做) */
   onModelChanged(): void;
   port: number;
-  /** 监听地址:默认 loopback;容器内需要 0.0.0.0 */
+  /** 监听地址:默认 loopback;需要局域网访问时用 WATCHING_BOT_PANEL_HOST */
   host?: string;
   token: string;
   log(msg: string): void;
@@ -513,9 +513,11 @@ export function startPanel(deps: PanelDeps): { stop(): void } {
     serveFrom(deps.plugins.assetDir((req.params.id ?? "")), rel, res);
   });
 
-  // 前端静态资源:始终 revalidate,避免改了面板却被浏览器缓存住
+  // 前端静态资源:始终 revalidate,避免改了面板却被浏览器缓存住。
+  // Electron 壳的 cwd 是用户数据目录,用 WATCHING_BOT_WEB_DIR 指向安装资源。
+  const webDir = resolve(process.env.WATCHING_BOT_WEB_DIR ?? "src/web/public");
   app.use(
-    express.static(resolve("src/web/public"), {
+    express.static(webDir, {
       etag: true,
       lastModified: true,
       setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),

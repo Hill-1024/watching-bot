@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ModuleBus, ModuleStatus, PerceptionEvent } from "../bus/types.js";
-import { discoverPlugins, isInside, permissionsOf, runtimeAccessOf, type DiscoveredPlugin } from "./manifest.js";
+import { discoverPlugins, isInside, permissionsOf, type DiscoveredPlugin } from "./manifest.js";
 import { JsonPluginStorage, pluginStoragePath } from "./storage.js";
 import type {
   PluginContext,
@@ -13,7 +13,6 @@ import type {
   PluginResponse,
   PluginView,
   LlmRoutingControl,
-  RestrictedSupervisorClient,
   RunningPlugin,
 } from "./types.js";
 
@@ -25,7 +24,6 @@ export interface PluginHostDeps {
   clock: { simNow(): number };
   log?: (msg: string) => void;
   moduleConfigs?: Record<string, unknown>;
-  supervisor?: RestrictedSupervisorClient;
   /** LLM 路由控制;按 manifest 的 llm-routing 权限下发给插件 */
   llmRouting?: LlmRoutingControl;
   /** 核心工具名:插件不得覆盖 */
@@ -119,7 +117,6 @@ export class PluginHost implements ModuleBus {
         ? { ...d.manifest.panel, url: this.panelUrl(id) ?? undefined }
         : undefined,
       permissions: permissionsOf(d.manifest),
-      runtimeAccess: runtimeAccessOf(d.manifest),
       error: loaded?.health.status === "failed" ? loaded.health.detail : undefined,
     };
   }
@@ -183,12 +180,6 @@ export class PluginHost implements ModuleBus {
       const log = this.loggerFor(id);
       const storage = new JsonPluginStorage(pluginStoragePath(this.deps.dataDir, id), log.warn);
 
-      for (const perm of permissionsOf(d.manifest)) {
-        if (perm === "realtime" && !this.deps.supervisor) {
-          log.warn("声明了 realtime 权限,但当前没有可用的 supervisor");
-        }
-      }
-
       const ctx: PluginContext = {
         id,
         manifest: d.manifest,
@@ -201,7 +192,6 @@ export class PluginHost implements ModuleBus {
         emitPerception: (e) => {
           for (const cb of this.perceptionCbs) cb(e);
         },
-        supervisor: d.manifest.runtimeAccess?.length ? this.deps.supervisor : undefined,
         llm: permissionsOf(d.manifest).includes("llm-routing") ? this.deps.llmRouting : undefined,
         publish: (data?: unknown) => this.deps.publish?.(`plugin:${id}`, data),
         publishCatalog: () => this.deps.publish?.("plugins"),

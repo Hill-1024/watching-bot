@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { PerceptionEvent } from "../../../../src/bus/types.js";
@@ -44,6 +44,61 @@ const IMG_MIME_EXT: Record<string, string> = {
   "image/webp": "webp",
 };
 
+const MAX_OUTGOING_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_OUTGOING_FILE_BYTES = 100 * 1024 * 1024;
+
+/**
+ * 把模型给的图片来源变成 OneBot image segment 的 file 值。
+ *
+ * - http(s) URL:原样交给协议端下载;
+ * - base64:// / data URL:转成 base64://;
+ * - 其余按本地路径读成 base64://,这样即使 bot 与协议端不共享文件系统也能发。
+ */
+function imageFileValue(ref: string): string {
+  const value = ref.trim();
+  if (!value) throw new Error("图片地址/路径为空");
+  if (value.startsWith("data:")) {
+    const match = /^data:[^;]*;base64,(.*)$/s.exec(value);
+    if (!match?.[1]) throw new Error("data URL 必须是 base64 编码");
+    return `base64://${match[1]}`;
+  }
+  if (/^base64:\/\//i.test(value)) return value;
+  if (/^https?:\/\//i.test(value)) return value;
+
+  const abs = resolve(value);
+  if (!existsSync(abs)) throw new Error(`图片文件不存在: ${value}`);
+  const stat = statSync(abs);
+  if (!stat.isFile()) throw new Error(`不是文件: ${value}`);
+  if (stat.size > MAX_OUTGOING_IMAGE_BYTES) {
+    throw new Error(`图片太大(${stat.size} 字节 > ${MAX_OUTGOING_IMAGE_BYTES} 字节上限)`);
+  }
+  return `base64://${readFileSync(abs).toString("base64")}`;
+}
+
+/** 文件上传用:URL 原样传;本地路径必须是协议端能读到的真实路径 */
+function fileUploadValue(ref: string): { file: string; name: string } {
+  const value = ref.trim();
+  if (!value) throw new Error("文件路径/地址为空");
+  if (/^https?:\/\//i.test(value)) {
+    let name = "file";
+    try {
+      name = decodeURIComponent(new URL(value).pathname.split("/").pop() || "file");
+    } catch {
+      // 名字取不到就用 file
+    }
+    return { file: value, name };
+  }
+
+  const abs = resolve(value);
+  if (!existsSync(abs)) throw new Error(`文件不存在: ${value}`);
+  const stat = statSync(abs);
+  if (!stat.isFile()) throw new Error(`不是文件: ${value}`);
+  if (stat.size > MAX_OUTGOING_FILE_BYTES) {
+    throw new Error(`文件太大(${stat.size} 字节 > ${MAX_OUTGOING_FILE_BYTES} 字节上限)`);
+  }
+  return { file: abs, name: basename(abs) };
+}
+
 /** 发送节流:最小间隔 + 抖动,超限排队 */
 class SendThrottle {
   private queue: (() => void)[] = [];
@@ -76,7 +131,7 @@ class SendThrottle {
 /**
  * OneBot v11 适配器:NapCat 与 SnowLuma 共用这一份协议/工具/存储实现。
  *
- * 运行时差异(NapCat 还是 SnowLuma)只影响 WebUI 端口、登录入口、容器规格,
+ * 运行时差异(NapCat 还是 SnowLuma)只影响 WebUI 端口与登录入口,
  * 不影响这里的一行代码 —— 两套 runtime 暴露的都是同一套 OneBot 11 动作。
  * 对插件只暴露:黑箱工具(消息读写)+ 感知事件(message/mention)。
  */
@@ -150,9 +205,10 @@ export class OneBotAdapter {
         this.selfId = info.user_id;
         host.log(`登录身份: ${info.nickname}(${info.user_id})`);
       }
-      const friends = (await this.client!.call("get_friend_list")) as unknown as ObFriend[];
+      // 刚登录时协议端可能还在同步通讯录,首次加载给足时间,避免开机顺序把缓存留空
+      const friends = (await this.client!.call("get_friend_list", {}, 60_000)) as unknown as ObFriend[];
       this.store?.cacheFriends(friends ?? []);
-      const groups = (await this.client!.call("get_group_list")) as unknown as ObGroup[];
+      const groups = (await this.client!.call("get_group_list", {}, 60_000)) as unknown as ObGroup[];
       this.store?.cacheGroups(groups ?? []);
       host.log(`通讯录就绪: ${friends?.length ?? 0} 好友, ${groups?.length ?? 0} 群`);
     } catch (err) {
@@ -258,36 +314,80 @@ export class OneBotAdapter {
 
     const sendParams = Type.Object({
       chat: Type.String({ description: '会话标识,如 "group:123" 或 "private:456"' }),
-      text: Type.String({ description: "要发送的内容(纯文本)" }),
+      text: Type.Optional(Type.String({ description: "文字内容;只想发图片/文件时可以省略" })),
       replyTo: Type.Optional(Type.Number({ description: "要引用回复的消息 id(可选)" })),
+      images: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "要一起发送的图片,每项可以是 http(s) URL、base64://、data:image/... 或本地文件路径;最多 9 张",
+          maxItems: 9,
+        }),
+      ),
+      files: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "要上传的文件,每项是本地文件路径或 http(s) URL(群文件/私聊文件);最多 5 个。文件由协议端读取,需与 bot 在同一台机器",
+          maxItems: 5,
+        }),
+      ),
     });
     const sendMessage: AgentTool<typeof sendParams> = {
       name: "send_message",
       label: "发消息",
       description:
-        "给某个会话发一条消息,可以带 replyTo 引用回复某条消息。chat 用 list_chats 里的标识:群聊 group:<群号>,私聊 private:<QQ号>——知道对方 QQ 就能主动私聊(群友、陌生人皆可,但非好友私聊可能受 QQ 风控限制)。发送有节奏限制(防止刷屏),急不来。",
+        "给某个会话发消息:文字、图片(images)和文件(files)可以一起发,可以带 replyTo 引用回复。chat 用 list_chats 里的标识:群聊 group:<群号>,私聊 private:<QQ号>——知道对方 QQ 就能主动私聊(群友、陌生人皆可,但非好友私聊可能受 QQ 风控限制)。图片支持 URL、base64 或本地路径;文件走上传接口,本地路径需要协议端也能读到。发送有节奏限制(防止刷屏),急不来。",
       parameters: sendParams,
-      execute: async (_id, params: { chat: string; text: string; replyTo?: number }) => {
+      execute: async (
+        _id,
+        params: { chat: string; text?: string; replyTo?: number; images?: string[]; files?: string[] },
+      ) => {
         const [type, idStr] = params.chat.split(":");
         const id = Number(idStr);
         if ((type !== "group" && type !== "private") || !Number.isFinite(id)) {
           throw new Error(`会话标识不合法: ${params.chat}`);
         }
-        await this.throttle.acquire();
-        const segments: ObSegment[] = [];
-        if (params.replyTo != null) {
-          segments.push({ type: "reply", data: { id: String(params.replyTo) } });
+        const text = params.text?.trim() ?? "";
+        const imageRefs = params.images ?? [];
+        const fileRefs = params.files ?? [];
+        if (!text && imageRefs.length === 0 && fileRefs.length === 0) {
+          throw new Error("text / images / files 至少要有一个");
         }
-        segments.push({ type: "text", data: { text: params.text } });
-        const messageId = await client().call(
-          type === "group" ? "send_group_msg" : "send_private_msg",
-          type === "group"
-            ? { group_id: id, message: segments }
-            : { user_id: id, message: segments },
-        );
+
+        // 先把本地图片读成 base64,避免发到一半才发现路径不对
+        const imageValues = imageRefs.map(imageFileValue);
+        const files = fileRefs.map(fileUploadValue);
+
+        const segments: ObSegment[] = [];
+        if (params.replyTo != null) segments.push({ type: "reply", data: { id: String(params.replyTo) } });
+        if (text) segments.push({ type: "text", data: { text } });
+        for (const file of imageValues) segments.push({ type: "image", data: { file } });
+
+        let messageId: unknown = null;
+        if (segments.length > 0) {
+          await this.throttle.acquire();
+          messageId = await client().call(
+            type === "group" ? "send_group_msg" : "send_private_msg",
+            type === "group" ? { group_id: id, message: segments } : { user_id: id, message: segments },
+          );
+        }
+
+        const uploaded: string[] = [];
+        for (const file of files) {
+          await this.throttle.acquire();
+          await client().call(
+            type === "group" ? "upload_group_file" : "upload_private_file",
+            type === "group" ? { group_id: id, file: file.file, name: file.name } : { user_id: id, file: file.file, name: file.name },
+            120_000,
+          );
+          uploaded.push(file.name);
+        }
+
+        const parts: string[] = [];
+        if (messageId != null) parts.push(params.replyTo != null ? "回复发出去了" : "消息发出去了");
+        if (uploaded.length > 0) parts.push(`文件已上传: ${uploaded.join(", ")}`);
         return {
-          content: [{ type: "text", text: params.replyTo != null ? "回复发出去了。" : "发出去了。" }],
-          details: { messageId },
+          content: [{ type: "text", text: `${parts.join(";")}。` }],
+          details: { messageId, images: imageValues.length, files: uploaded },
         };
       },
     };

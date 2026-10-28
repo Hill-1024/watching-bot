@@ -82,7 +82,6 @@ describe("插件 manifest 与发现", () => {
     expect(ids).toContain("builtin");
     expect(ids).toContain("qq");
     const qq = plugins.find((p) => p.manifest.id === "qq")!;
-    expect(qq.manifest.runtimeAccess).toEqual(["napcat", "snowluma"]);
     expect(qq.panelEntryPath).toBeTruthy();
     const builtin = plugins.find((p) => p.manifest.id === "builtin")!;
     expect(builtin.manifest.panel?.route).toBe("builtin");

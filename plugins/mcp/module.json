@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "mcp",
+  "name": "MCP",
+  "version": "0.1.0",
+  "description": "标准 MCP 客户端:把外部 MCP server 的工具接给 agent(stdio / SSE)。",
+  "entry": "./server/index.ts",
+  "permissions": ["tools", "config"]
+}

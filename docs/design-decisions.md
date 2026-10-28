@@ -53,7 +53,7 @@
 NapCat 和 SnowLuma 都是挂在 QQ 上的独立运行时。watching-bot 通过 OneBot 11 WebSocket 与它们通信(`napcat` 是协议客户端封装,`snowluma` 复用同一套工具实现),因此:
 
 - `third_party/napcat` submodule 只是源码/协议参考,不参与构建运行;
-- 运行时用官方 Docker 镜像(compose 编排)或本机启动器;
+- 运行时由官方发行包以本机独立进程启动,bot 只连 OneBot WS;
 - "未读"这类 OneBot 没有的概念,由模块自维护游标实现 —— `napcat` / `snowluma` 是全项目唯一了解 QQ 的地方,核心与状态管理不知道 QQ 的存在。
 
 ## 8. QQ 接入是运行时选择,不是核心分叉
@@ -62,7 +62,7 @@ NapCat 与 SnowLuma 都能提供 OneBot 11,所以我们没有在 core 里加分�
 
 - 新增一个 `snowluma` 模块身份,复用 `NapcatModule` 的 21 个工具实现;
 - 用 `src/qq-backend.ts` 管理互斥选择,缺失时默认 **NapCat**,选择写入 `data/qq-backend.json`;
-- 面板「QQ 接入」只停/启 agent 侧模块,不托管 QQ 进程;Docker 由 compose 管 NapCat,SnowLuma 需要自己的运行时。
+- 面板「QQ 接入」只断开/建立 agent 侧连接,不托管 QQ 进程;NapCat / SnowLuma 都由用户或系统服务启动。
 
 这样 agent 的工具集、状态语义与消息库不因换运行时改变,切换成本停留在模块装配层。
 
@@ -72,15 +72,9 @@ NapCat 与 SnowLuma 都能提供 OneBot 11,所以我们没有在 core 里加分�
 
 因此 `createAgent` 接收的是 `contextWindow` getter,`transformContext` 每次读取当前模型管理器的生效窗口;面板热切换模型后,压缩阈值立即跟随,不会沿用旧值。
 
-## 10. 发布只认版本 tag
+## 10. 发布以版本 tag 为准
 
-镜像发布曾经在 main push 时也触发,导致每个普通提交都可能覆盖 `latest`。现在的约束是:
-
-- GitHub Actions 只在 `v*` tag 上构建/推送;
-- `latest` 只在版本 tag 构建时更新,跟随最新 release;
-- main 分支只用于开发和测试,不产生发布镜像。
-
-这条规则保证 `latest` 与版本标签、发布说明一致,避免"分支构建悄悄变成线上镜像"。
+现在没有镜像流水线,发布就是给仓库打 `v*` tag;main 分支只用于开发和测试。这样版本号与发布说明始终对应,不会出现"分支构建悄悄变成线上产物"。
 
 ## 11. 面板事件驱动,不做固定频率轮询
 
@@ -102,22 +96,47 @@ NapCat 与 SnowLuma 都能提供 OneBot 11,所以我们没有在 core 里加分�
 
 因此动态 `import()` 的失败被显式捕获并渲染 `PluginErrorPage`,而不是让 Vue 抛到根节点白屏。插件启停单飞,失败时回滚半初始化资源;工具重名直接拒绝启动,避免"一个坏插件污染 agent 全部工具"。
 
-## 13. Docker 控制集中到 runtime-supervisor
+## 13. 不做 Docker,直接跑 Node
 
-主进程不挂 Docker socket。`runtime-supervisor` 是独立容器,只暴露按 runtime ID 的 install/start/stop/restart/recreate/logs;镜像、容器名、卷、端口、安全选项全部来自代码白名单,调用方不能传 image/cmd/bind mount。
+agent 需要读写宿主文件、跑 shell、操作桌面。容器会把这些能力全切断,还会额外引入 supervisor、网关、挂载与网络别名,维护成本远高于收益。因此部署形态回到本地开发同款:
 
-理由:插件是可信代码,但"可信"不等于"应该拥有宿主 root"。即使 QQ 插件被写坏,它最多把 napcat/snowluma 容器搞停,不能 `docker run -v /:/host`。
+- `npm start` / 服务脚本直接用 Node + tsx 跑 TypeScript;
+- NapCat / SnowLuma 是独立本机进程,bot 只连 OneBot WS;
+- 服务化由 Windows 计划任务、systemd user 服务或 launchd 负责;
+- 一键安装/卸载脚本处理依赖、`.env`、数据目录与自启。
 
-Supervisor 本身等价于 Docker 高权限,所以:必须有 token、不发布宿主端口、只在内网可达;文档里明确标注这一风险。
+代价是 bot 拥有真实宿主权限。这个风险通过 `hostTools` 的开关、工作目录约束与"只接入可信 QQ 会话"来收敛,而不是靠容器假隔离。
 
 ## 14. QQ 只有一个插件身份
 
 NapCat 与 SnowLuma 曾是两个 `BotModule` 子类,工具实现靠继承复用。这会让"两个模块"渗透进配置、面板与切换逻辑。
 
-现在是一个 `qq` 插件:一份 OneBot 11 客户端/工具/存储,`runtimes.ts` 只描述 WebUI 端口、noVNC、登录入口与安全提示。切换 runtime 只换容器与连接端点,不换能力;同一时间只允许一套在线,失败回滚旧 runtime。
+现在是一个 `qq` 插件:一份 OneBot 11 客户端/工具/存储,`runtimes.ts` 只描述 OneBot 地址、WebUI 端口、noVNC、登录入口与安全提示。切换 runtime 只换连接端点,不换能力;同一时间只允许一套在线,失败回滚旧 runtime。
 
 ## 15. 主人 QQ 的运行时修改在重启后生效
 
 `masterQQ` 目前仍由启动时的环境变量或 `data/builtin.json` 读取,用于睡眠中私聊唤醒的豁免额度。插件可以在自己的页面修改它并落盘,但核心不会为了一个字段去反向读取插件私有状态——那会破坏"核心不认识插件"的边界。
 
 代价是修改后需要重启才生效;这是有意的取舍,面板上有说明。
+
+## 16. 开机单入口,组件由框架唤醒
+
+系统层只注册一个 `watching-bot` 自启入口。QQ、SnowLuma 等本机组件由 `plugins/runtime` 读取 `data/runtime.json` 后启动、探测与重启:
+
+- 不再为每个组件单独注册计划任务/systemd unit,避免登录顺序、环境变量与日志分裂;
+- 已运行的外部进程会被接管,不会重复拉起;
+- `check.process` / `check.port` 做存活探测,退出后下一轮自动唤醒;
+- 框架重启时由插件重新唤醒组件;QQ / SnowLuma 登录态与数据在各自目录,不因重启丢失;
+- 新增组件只改 `data/runtime.json`,不需要改系统服务配置。
+
+## 17. 桌面壳只做 UI / 进程宿主
+
+Electron 版本没有把业务搬进渲染进程:
+
+- 主进程只负责窗口、托盘、开机自启、sidecar 启停;
+- 后端仍是原来的 Node 程序,用打包内的 Node 运行时 + `resources/server` 源码/依赖执行;
+- 后端只监听 `127.0.0.1` 的随机空闲端口,每次启动生成随机 token;
+- 壳内窗口自动带 token 打开 Dashboard,壳外浏览器必须从托盘取得该 token;
+- WebUI-only 安装仍然保留,适合无桌面/长期挂机环境;两种形态二选一。
+
+这样桌面壳不会分叉 agent/插件/状态逻辑,Electron 升级也不会影响业务代码。
