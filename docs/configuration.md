@@ -83,8 +83,8 @@ API key 按优先级:`apiKeyEnv` 指定的环境变量 → pi 标准环境变量
 |---|---|---|
 | `drowsyInject` / `drowsyTier2` / `drowsyTier3` | 45/65/78 | 困意注入三档(三档文案会催它自己去睡) |
 | `forcedSleep` | 90 | 强制入睡 |
-| `naturalWake` | 15 | 睡到这么低自然醒 |
-| `drowsyOnWake` | 40 | 醒来时高于此值 → 注入「没睡够」 |
+| `naturalWake` | 22 | 睡到这么低自然醒 |
+| `drowsyOnWake` | 32 | 醒来时高于此值 → 注入「没睡够」 |
 | `sleepHardCapSimMinutes` | 720 | 连续睡眠硬上限(12 模拟时) |
 | `alarmRingIntervalSimMinutes` | 10 | 赖床后闹钟重响间隔 |
 | `stormWindowSimMinutes` / `stormMinMentions` | 3 / 5 | 窗口内被@≥5 次判为风暴 |
@@ -101,7 +101,7 @@ API key 按优先级:`apiKeyEnv` 指定的环境变量 → pi 标准环境变量
 ## memory / sleep / judge
 
 - `memory`:数据目录、MEMORY.md 路径、日记目录、`consolidateDiaryDaysToWeek`(攒几篇日记做周归并,默认 7)。
-- `sleep`:`wakeOnStorm`(睡眠中@风暴是否打断,默认 true)、`maxSnoozeBeforeForcedWake`(赖床上限,默认 6,超过强制拽醒)。
+- `sleep`:`wakeOnStorm`(睡眠中@风暴是否打断,默认 true)、`maxSnoozeBeforeForcedWake`(赖床上限,默认 3,超过强制拽醒)、`minFatigueToSleep`(入睡尝试门槛,默认 28;低于它躺下只是 resting 放空,不算睡着)。
 - `judge`:`enabled`、`cooldownSimMinutes`(30)、`maxCallsPerSimDay`(6)—— 实时通道限流;睡眠通道零额外调用不受此限。
 
 ## modules / moduleConfig

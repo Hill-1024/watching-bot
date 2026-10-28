@@ -61,6 +61,8 @@ export class AgentCore implements CoreCommands, MachineHost {
   private lastAlarmNote: string | undefined;
   /** 连续「什么都没做」的 run 次数,用于空转退避节奏 */
   private emptyRunStreak = 0;
+  /** 模型 wait 挂起期间(true 到下一次 kick 触发) */
+  private waiting = false;
   private readonly log: (msg: string) => void;
 
   private stateCtx: StateContext;
@@ -313,19 +315,24 @@ export class AgentCore implements CoreCommands, MachineHost {
   }
 
   scheduleKickIn(simMs: number, reason: string): void {
-    this.scheduleKickAt(this.clock.simNow() + simMs, reason);
+    // 工具执行期间(如 wait)也要能排下一次唤醒:这不是打断当前输出,只是记录「何时再来」。
+    // 之前这里被 kicking 拦截,导致 wait(N) 的排程被直接丢弃,run 结束后立刻 continue → 高频空转。
+    this.scheduleKickAt(this.clock.simNow() + simMs, reason, true);
   }
 
-  private scheduleKickAt(atSim: number, reason: string): void {
-    if (this.kicking || this.deps.agent.state.isStreaming) {
-      // 正在输出时不打断、不补踢。QQ 消息已经进了未读库,等它自己去看。
+  private scheduleKickAt(atSim: number, reason: string, allowWhileRunning = false): void {
+    if (!allowWhileRunning && (this.kicking || this.deps.agent.state.isStreaming)) {
+      // 即时打断型 kick:正在输出时不打断、不补踢。QQ 消息已经进了未读库,等它自己去看。
       return;
     }
     if (this.nextKickSim != null && this.nextKickSim <= atSim) return;
+    const overridden = this.nextKickSim != null && this.nextKickSim > atSim;
     this.cancelKick?.();
     this.nextKickSim = atSim;
     const delayReal = Math.max(0, this.clock.simToRealMs(atSim - this.clock.simNow()));
-    this.log(`[loop] 排程 kick @sim+${Math.round(delayReal)}ms (${reason})`);
+    this.log(
+      `[loop] 排程 kick @sim+${Math.round(delayReal)}ms (${reason})${overridden ? " [打断等待]" : ""}`,
+    );
     this.cancelKick = this.clock.scheduleAt(atSim, () => {
       this.nextKickSim = null;
       this.cancelKick = null;
@@ -340,6 +347,7 @@ export class AgentCore implements CoreCommands, MachineHost {
     const agent = this.deps.agent;
     if (agent.state.isStreaming) return;
     this.kicking = true;
+    this.waiting = false; // 新一轮 kick 开始时退出上一段 wait
     try {
       const batch: AgentMessage[] = this.deps.injector.drain();
       batch.push({
@@ -391,6 +399,7 @@ export class AgentCore implements CoreCommands, MachineHost {
     this.events.emit({ type: "run_end", hadToolCalls: lastMsgs.toolCalls > 0, textLen: lastMsgs.textLen });
     // 模型自己 wait(N) 时尊重那个时刻;否则按「这次 run 是否真的做了事」决定下一次间隔。
     if (this.nextKickSim != null) {
+      this.waiting = true; // 模型安排了下一次行动时间,进入挂起(可被 @/戳一戳打断)
       this.log(`[loop] 已有待触发(如 wait),到点再继续`);
       return;
     }
@@ -414,17 +423,26 @@ export class AgentCore implements CoreCommands, MachineHost {
     if (kind === "mention") {
       this.mentionTimes.push(this.clock.simNow());
     }
-    // 正在输出时新消息只留在 QQ 未读里,不注入、不打断当前回合
-    if (
-      this.machine.phase === "awake" &&
-      !this.kicking &&
-      !this.deps.agent.state.isStreaming &&
-      (kind === "message" || kind === "mention")
-    ) {
-      const envKind = kind === "message" ? "message" : "mention";
-      if (!this.deps.injector.hasPendingEnv(envKind)) {
-        this.deps.injector.queueEnv(envKind);
-        this.scheduleKickAt(this.clock.simNow(), "perception");
+    // 感知注入不能无条件排程:那会把 wait(12h) 挤成 wait(几秒)。
+    // - wait 中:@/戳一戳 打断(模型自己决定回不回应);普通消息只在缓存里攒着
+    // - 非 wait 且非输出中:同 kind 合并后注入一次,尊重已排程的更晚 kick
+    // wait 挂起时哪些事件能打断:被@、被戳(mention)与私聊(message + private: 来源)。
+    // 群里普通闲聊不打断——攒进未读,等模型自己到点去看。
+    const isPrivateMessage = kind === "message" && Boolean(source?.startsWith("private:"));
+    const isInterrupt = kind === "mention" || isPrivateMessage;
+    if (this.machine.phase === "awake" && !this.kicking && !this.deps.agent.state.isStreaming) {
+      if (this.waiting && !isInterrupt) {
+        return;
+      }
+      if (kind === "message" || kind === "mention") {
+        const envKind = kind === "message" ? "message" : "mention";
+        if (!this.deps.injector.hasPendingEnv(envKind)) {
+          this.deps.injector.queueEnv(envKind);
+          if (this.waiting && isInterrupt) {
+            this.log(`[loop] wait 被 ${kind} 打断`);
+          }
+          this.scheduleKickAt(this.clock.simNow(), "perception");
+        }
       }
     }
     // 睡眠中:群聊不吵醒;私聊累积达到阈值 → 唤醒决策(可赖床,赖床后继续累积会再次触发)

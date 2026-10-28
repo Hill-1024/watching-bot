@@ -28,12 +28,18 @@ export function buildCoreTools(host: CoreToolsHost): AgentTool<any>[] {
     name: "wait",
     label: "发呆等待",
     description:
-      "什么都不做,安静地度过一段时间(模拟时间)。没事做、想放空、或者单纯想让时间流过去时调用。",
+      "什么都不做,安静地度过一段时间(模拟时间)。没事做、想放空、或者单纯想让时间流过去时调用。调用后这一轮就停下了,到点你会自然继续;期间被@、被戳或收到私聊会打断等待。",
     parameters: waitParams,
     execute: async (_id, params: Static<typeof waitParams>) => {
       const minutes = Math.round(params.minutes);
       host.scheduleKickIn(minutes * MIN, `wait:${minutes}m`);
-      return { content: [{ type: "text", text: toolCopy.waited(minutes) }], details: { minutes } };
+      // terminate:wait 是「挂起」而不是「继续做事」——必须结束当前 run,
+      // 否则模型会在同一次 run 里反复 wait + 刷工具,形成几秒一次的高频空转。
+      return {
+        content: [{ type: "text", text: toolCopy.waited(minutes) }],
+        details: { minutes },
+        terminate: true,
+      };
     },
   };
 
