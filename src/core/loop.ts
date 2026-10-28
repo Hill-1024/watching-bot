@@ -35,6 +35,8 @@ export interface AgentCoreDeps {
   usage?: UsageRecorder;
   /** 有新活动日志条目时通知(面板事件驱动刷新) */
   onActivity?: (entry: ActivityEntry) => void;
+  /** 流式预览:正在生成中的思考/文本(250ms 节流),null 表示本轮生成结束 */
+  onActivityDelta?: (delta: { kind: "thinking" | "text"; text: string } | null) => void;
   log?: (msg: string) => void;
 }
 
@@ -135,12 +137,23 @@ export class AgentCore implements CoreCommands, MachineHost {
 
   private activitySeq = 0;
   private activityInserts = 0;
+  private lastDeltaAt = 0;
+  /** 流式预览累积(按 delta 累加,message_start 清零) */
+  private streamThinking = "";
+  private streamText = "";
   private readonly activityBuf: ActivityEntry[] = [];
   private static readonly ACTIVITY_CAP = 600;
   private static readonly ACTIVITY_TEXT_CAP = 4000;
 
-  private pushActivity(kind: ActivityEntry["kind"], text: string): void {
-    const trimmed = text.slice(0, AgentCore.ACTIVITY_TEXT_CAP);
+  /** 流式预览节流推送:最多 4 次/秒,避免每 token 一条 SSE */
+  private streamPreview(kind: "thinking" | "text", text: string): void {
+    const now = Date.now();
+    if (now - this.lastDeltaAt < 250) return;
+    this.lastDeltaAt = now;
+    this.deps.onActivityDelta?.({ kind, text: text.slice(0, AgentCore.ACTIVITY_TEXT_CAP) });
+  }
+
+  private pushActivity(kind: ActivityEntry["kind"], text: string): void {    const trimmed = text.slice(0, AgentCore.ACTIVITY_TEXT_CAP);
     const tsSim = this.clock.simNow();
     const tsReal = Date.now();
     const entry: ActivityEntry = { seq: ++this.activitySeq, tsSim, tsReal, kind, text: trimmed };
@@ -195,6 +208,7 @@ export class AgentCore implements CoreCommands, MachineHost {
         const textLen = this.assistantTextLen(event.message);
         this.events.emit({ type: "turn_end", toolNames, textLen });
       } else if (event.type === "message_end") {
+        this.deps.onActivityDelta?.(null); // 生成完成,撤掉流式预览
         const m = event.message as { role?: string; content?: unknown; stopReason?: string; errorMessage?: string };
         if (m.role === "assistant" && Array.isArray(m.content)) {
           for (const part of m.content as { type: string; thinking?: string; text?: string; name?: string; arguments?: unknown }[]) {
@@ -225,6 +239,19 @@ export class AgentCore implements CoreCommands, MachineHost {
         this.pushActivity(event.isError ? "error" : "tool_result",
           `${event.toolName} → ${brief || (event.isError ? "(失败)" : "(无文本结果)")}`,
         );
+      } else if (event.type === "message_start") {
+        this.streamThinking = "";
+        this.streamText = "";
+      } else if (event.type === "message_update") {
+        // 用增量事件自行累积:partial message 里的 content 在流式早期可能还是空的
+        const ev = event.assistantMessageEvent as { type?: string; delta?: string };
+        if (ev.type === "thinking_delta" && ev.delta) {
+          this.streamThinking += ev.delta;
+          this.streamPreview("thinking", this.streamThinking);
+        } else if (ev.type === "text_delta" && ev.delta) {
+          this.streamText += ev.delta;
+          this.streamPreview("text", this.streamText);
+        }
       } else if (event.type === "tool_execution_start") {
         this.events.emit({
           type: "tool_call",

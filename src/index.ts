@@ -282,6 +282,8 @@ async function main(): Promise<void> {
     usage,
     log,
     onActivity: () => publish("activity"),
+    // 流式预览:直接推给面板(不落库、不进增量游标),message_end 时推 null 撤掉
+    onActivityDelta: (delta) => live.publish("activity:delta", delta),
   });
   let consolidating: Promise<void> | null = null;
   core.runConsolidation = async () => {

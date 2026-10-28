@@ -4476,3 +4476,15 @@ input[type="search"]::-webkit-search-decoration {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* 活动日志:流式生成中的临时条目 */
+.log-item.is-streaming {
+  opacity: 0.8;
+  border-left: 2px solid var(--accent);
+  animation: wb-stream-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes wb-stream-pulse {
+  0%, 100% { border-left-color: var(--accent); }
+  50% { border-left-color: transparent; }
+}

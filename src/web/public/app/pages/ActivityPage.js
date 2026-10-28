@@ -36,6 +36,8 @@ export const ActivityPage = {
       set: (v) => setActivityLive(v),
     });
 
+    const streaming = computed(() => store.activityStreaming ?? null);
+
     const liveEntries = computed(() => {
       const kinds = selectedKinds.value;
       if (!kinds.length) return store.activity;
@@ -126,6 +128,8 @@ export const ActivityPage = {
     let offLive = null;
     onMounted(() => {
       ticker = setInterval(() => (now.value = Date.now()), 3000);
+      // 进入本页即开始同步(默认打开);离开时释放,避免在其它页面空拉
+      setActivityLive(true);
       // 只有本页挂载时才会响应 activity 事件;数据拉取也只在此时发生
       offLive = onLive("activity", () => void fetchActivity());
       if (tab.value === "history") void loadHistory();
@@ -134,6 +138,7 @@ export const ActivityPage = {
     onBeforeUnmount(() => {
       clearInterval(ticker);
       offLive?.();
+      setActivityLive(false);
     });
 
     return {
@@ -218,6 +223,13 @@ export const ActivityPage = {
               <span class="log-time">{{ fmtDateTime(e.tsSim) }}<span class="log-time-real">真实 {{ fmtDateTime(e.tsReal) }}</span></span>
             </div>
             <p class="log-text">{{ e.text }}</p>
+          </div>
+          <div v-if="streaming" class="log-item is-streaming" :class="'is-' + streaming.kind">
+            <div class="log-head">
+              <span class="log-tag" :class="'tag-' + kindMeta(streaming.kind).tone">{{ kindMeta(streaming.kind).label }}</span>
+              <span class="log-time">生成中<span class="log-time-real">每 250ms 刷新</span></span>
+            </div>
+            <p class="log-text">{{ streaming.text }}</p>
           </div>
         </div>
         <div v-if="!follow && newCount > 0" class="feed-jump">

@@ -22,6 +22,7 @@ export const store = reactive({
   activity: [],
   activitySeq: 0,
   activityLive: false,
+  activityStreaming: null,
   activityError: "",
   injections: [],
   injectionLastId: 0,
@@ -246,6 +247,9 @@ export function startLiveFeed() {
     onLive("plugins", applyPlugins),
     onLive("activity", () => {
       if (store.activityLive) void fetchActivity();
+    }),
+    onLive("activity:delta", (d) => {
+      store.activityStreaming = d && typeof d === "object" ? d : null;
     }),
     onLive("injections", () => {
       if (store.injectionsLive) void fetchInjections();
