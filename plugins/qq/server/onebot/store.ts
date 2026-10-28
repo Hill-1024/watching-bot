@@ -100,12 +100,12 @@ export class NapcatStore {
     }
   }
 
-  /** 戳一戳(OneBot 是通知事件不是消息):落到 @提及流,带前缀让模型区分 */
+  /** 戳一戳(OneBot 是通知事件不是消息):落到 @提及流,群戳与私聊戳都记 */
   insertPoke(e: { user_id: number; target_id: number; group_id?: number; time: number }): void {
-    const groupId = e.group_id ?? 0;
+    const chatKey = e.group_id ? `group:${e.group_id}` : `private:${e.user_id}`;
     this.db
       .prepare("INSERT INTO at_mentions(chat_key, sender_name, text, msg_time) VALUES (?,?,?,?)")
-      .run(`group:${groupId}`, String(e.user_id), "[戳了戳你]", e.time);
+      .run(chatKey, String(e.user_id), "[戳了戳你]", e.time);
   }
 
   /** 某条消息里的图片引用 [{url, file}] */
