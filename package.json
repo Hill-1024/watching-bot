@@ -1,6 +1,6 @@
 {
   "name": "watching-bot",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Self-looping persona bot: hidden state machine + sleep/wake scheduler over a pi agent core, capabilities plugged in via a module bus.",
