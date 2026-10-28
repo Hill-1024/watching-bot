@@ -188,8 +188,17 @@ async function main(): Promise<void> {
   const injector = new Injector(() => cur().model.api, repo, () => clock.simNow(), () => publish("injections"));
   const summarize = async (messages: AgentMessage[]) => {
     const { model, streamFn } = cur();
+    // 摘要输入先转纯文本并截断:直接把几千条消息丢给模型会触发网关的 JSON 节点数上限(400)
+    const transcript = transcriptToText(messages, 60_000);
+    const input: AgentMessage[] = [
+      {
+        role: "user",
+        content: `以下是较早的对话记录,请总结:\n\n${transcript}`,
+        timestamp: Date.now(),
+      },
+    ];
     const { text, usage: u } = await generateSummaryWithUsage(
-      messages,
+      input,
       model as never,
       8192,
       curApiKey(),
@@ -421,7 +430,9 @@ async function main(): Promise<void> {
       phase: machine.phase,
       sleepStartedSim: machine.sleepStartedSim,
       snoozeCount: machine.snoozeCount,
-      agentMessages: agent.state.messages,
+      // 快照只留热尾:完整历史会让 state.json 膨胀到几十 MB,重启加载慢,
+      // 而且发给模型前本来就会被 trimForProtocol 裁掉;长期记忆在 MEMORY.md/日记里
+      agentMessages: agent.state.messages.slice(-800),
     };
     const path = resolve(SNAPSHOT_FILE);
     mkdirSync(dirname(path), { recursive: true });
