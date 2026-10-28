@@ -21,7 +21,13 @@ export const store = reactive({
   legacyBackend: false,
   activity: [],
   activitySeq: 0,
-  activityLive: false,
+  activityLive: (() => {
+    try {
+      return localStorage.getItem("wb_activity_live") !== "0"; // 默认开
+    } catch {
+      return true;
+    }
+  })(),
   activityStreaming: null,
   activityError: "",
   injections: [],
@@ -216,9 +222,17 @@ export async function fetchInjections() {
   }
 }
 
-/** 只有活动日志页挂载时才会被事件驱动拉取 */
+/**
+ * 活动日志同步开关:默认开,用户手动关闭后记住选择(localStorage)。
+ * 刷新/切换页面不再把它重置回关闭。
+ */
 export function setActivityLive(live) {
   store.activityLive = Boolean(live);
+  try {
+    localStorage.setItem("wb_activity_live", live ? "1" : "0");
+  } catch {
+    // 隐私模式等场景忽略
+  }
   if (live) {
     store.activitySeq = 0;
     store.activity = [];

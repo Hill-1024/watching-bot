@@ -128,9 +128,12 @@ export const ActivityPage = {
     let offLive = null;
     onMounted(() => {
       ticker = setInterval(() => (now.value = Date.now()), 3000);
-      // 进入本页即开始同步(默认打开);离开时释放,避免在其它页面空拉
-      setActivityLive(true);
-      // 只有本页挂载时才会响应 activity 事件;数据拉取也只在此时发生
+      // 同步开关默认开且跨刷新记住;进页面时若开着就先拉一次(不强制打开,尊重用户手动关闭)
+      if (store.activityLive) {
+        store.activitySeq = 0;
+        store.activity = [];
+        void fetchActivity();
+      }
       offLive = onLive("activity", () => void fetchActivity());
       if (tab.value === "history") void loadHistory();
       else nextTick(scrollToBottom);
@@ -138,7 +141,7 @@ export const ActivityPage = {
     onBeforeUnmount(() => {
       clearInterval(ticker);
       offLive?.();
-      setActivityLive(false);
+      // 离开页面只停止本页订阅,不关闭开关(否则刷新/切页会把用户的选择重置掉)
     });
 
     return {
