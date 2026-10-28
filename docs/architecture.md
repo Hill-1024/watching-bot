@@ -67,7 +67,7 @@ interface PerceptionEvent {
 - 选择存 `data/qq-backend.json`(gitignored),缺失或损坏时默认 **NapCat**;
 - `napcat` 与 `snowluma` 互斥启动;面板「模块与系统 → QQ 接入」热切换,普通 `/api/modules` 启停对这两个模块被拒绝;
 - `moduleConfig.snowluma` 与 napcat 同构,`NAPCAT_URL` / `NAPCAT_TOKEN`、`SNOWLUMA_URL` / `SNOWLUMA_TOKEN` 分别覆盖连接参数;
-- SnowLuma 模块复用 `NapcatModule` 的 19 个工具实现,只替换模块身份与能力摘要,并默认共用 `data/modules/napcat.db` 与 `data/modules/memes`。
+- SnowLuma 模块复用 `NapcatModule` 的 21 个工具实现,只替换模块身份与能力摘要,并默认共用 `data/modules/napcat.db` 与 `data/modules/memes`。
 
 这里切的是 **agent 侧模块**,不是 QQ 进程生命周期:本地开发时 NapCat / SnowLuma 由各自启动器托管,Docker 下 NapCat 由 compose 服务管理;面板不负责启动/停止运行时。
 

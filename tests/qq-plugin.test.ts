@@ -30,6 +30,8 @@ const EXPECTED_TOOLS = [
   "set_group_ban",
   "set_group_special_title",
   "get_group_member_info",
+  "list_group_members",
+  "get_stranger_info",
   "set_msg_emoji_like",
   "view_message_image",
   "save_meme_from_message",

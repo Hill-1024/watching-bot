@@ -60,7 +60,7 @@ NapCat 和 SnowLuma 都是挂在 QQ 上的独立运行时。watching-bot 通过 
 
 NapCat 与 SnowLuma 都能提供 OneBot 11,所以我们没有在 core 里加分支,而是:
 
-- 新增一个 `snowluma` 模块身份,复用 `NapcatModule` 的 19 个工具实现;
+- 新增一个 `snowluma` 模块身份,复用 `NapcatModule` 的 21 个工具实现;
 - 用 `src/qq-backend.ts` 管理互斥选择,缺失时默认 **NapCat**,选择写入 `data/qq-backend.json`;
 - 面板「QQ 接入」只停/启 agent 侧模块,不托管 QQ 进程;Docker 由 compose 管 NapCat,SnowLuma 需要自己的运行时。
 

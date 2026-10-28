@@ -264,7 +264,8 @@ export class OneBotAdapter {
     const sendMessage: AgentTool<typeof sendParams> = {
       name: "send_message",
       label: "发消息",
-      description: "给某个会话发一条消息,可以带 replyTo 引用回复某条消息。发送有节奏限制(防止刷屏),急不来。",
+      description:
+        "给某个会话发一条消息,可以带 replyTo 引用回复某条消息。chat 用 list_chats 里的标识:群聊 group:<群号>,私聊 private:<QQ号>——知道对方 QQ 就能主动私聊(群友、陌生人皆可,但非好友私聊可能受 QQ 风控限制)。发送有节奏限制(防止刷屏),急不来。",
       parameters: sendParams,
       execute: async (_id, params: { chat: string; text: string; replyTo?: number }) => {
         const [type, idStr] = params.chat.split(":");
@@ -367,6 +368,104 @@ export class OneBotAdapter {
             {
               type: "text",
               text: `${info.card || info.nickname || params.user}: ${roleName}${info.title ? `,头衔「${info.title}」` : ""}。`,
+            },
+          ],
+          details: info as unknown as Record<string, unknown>,
+        };
+      },
+    };
+
+    const memberListParams = Type.Object({
+      chat: Type.String({ description: '群会话标识,如 "group:123"' }),
+      query: Type.Optional(
+        Type.String({ description: "按 QQ 号 / 昵称 / 群名片过滤(不区分大小写);不填则按活跃度列最近发言的人" }),
+      ),
+      limit: Type.Optional(Type.Number({ description: "最多返回几条,默认 30,最多 100" })),
+    });
+    const listGroupMembers: AgentTool<typeof memberListParams> = {
+      name: "list_group_members",
+      label: "看群成员",
+      description:
+        "列出群成员及其 QQ 号(可按昵称/QQ 搜索)。想找某个人是谁、想主动私聊某位群友时先用它拿 QQ 号,再用 send_message 发 private:<QQ>。",
+      parameters: memberListParams,
+      execute: async (_id, params: { chat: string; query?: string; limit?: number }) => {
+        const groupId = Number(params.chat.split(":")[1]);
+        if (!Number.isFinite(groupId)) throw new Error(`会话标识不合法: ${params.chat}`);
+        const all = (await client().call("get_group_member_list", { group_id: groupId })) as {
+          user_id: number;
+          nickname?: string;
+          card?: string;
+          role?: string;
+          title?: string;
+          last_sent_time?: number;
+        }[];
+        const q = (params.query ?? "").trim().toLowerCase();
+        const limit = Math.min(Math.max(Math.round(params.limit ?? 30), 1), 100);
+        const roleRank: Record<string, number> = { owner: 3, admin: 2, member: 1 };
+        const filtered = (Array.isArray(all) ? all : [])
+          .filter((m) => {
+            if (!q) return true;
+            return (
+              String(m.user_id).includes(q) ||
+              (m.nickname ?? "").toLowerCase().includes(q) ||
+              (m.card ?? "").toLowerCase().includes(q)
+            );
+          })
+          .sort((a, b) => {
+            const byActivity = (b.last_sent_time ?? 0) - (a.last_sent_time ?? 0);
+            if (byActivity !== 0) return byActivity;
+            return (roleRank[b.role ?? "member"] ?? 0) - (roleRank[a.role ?? "member"] ?? 0);
+          })
+          .slice(0, limit);
+        if (!filtered.length) {
+          return {
+            content: [{ type: "text", text: q ? `没有匹配「${params.query}」的群成员。` : "群里没有成员信息。" }],
+            details: { groupId, count: 0 },
+          };
+        }
+        const roleName = (r?: string) => ({ owner: "群主", admin: "管理", member: "" })[r ?? "member"] ?? "";
+        const lines = filtered.map((m) => {
+          const role = roleName(m.role);
+          const name = m.card || m.nickname || String(m.user_id);
+          return `- ${m.user_id} ${name}${role ? `(${role})` : ""}${m.title ? ` 头衔:${m.title}` : ""}`;
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `群 ${groupId} 成员(${filtered.length}/${Array.isArray(all) ? all.length : 0}):\n${lines.join("\n")}`,
+            },
+          ],
+          details: { groupId, count: filtered.length, total: Array.isArray(all) ? all.length : 0 },
+        };
+      },
+    };
+
+    const strangerParams = Type.Object({
+      user: Type.Number({ description: "对方 QQ 号" }),
+    });
+    const getStrangerInfo: AgentTool<typeof strangerParams> = {
+      name: "get_stranger_info",
+      label: "看陌生人资料",
+      description:
+        "查一个 QQ 号的基本资料(昵称、性别、年龄、签名),用于私聊前了解对方是谁。对方不是好友也能查(取决于隐私设置)。",
+      parameters: strangerParams,
+      execute: async (_id, params: { user: number }) => {
+        const info = (await client().call("get_stranger_info", {
+          user_id: params.user,
+          no_cache: false,
+        })) as { nickname?: string; sex?: string; age?: number; sign?: string; qid?: string };
+        const bits = [
+          info.nickname ?? String(params.user),
+          info.sex && info.sex !== "unknown" ? info.sex : "",
+          info.age ? `${info.age} 岁` : "",
+          info.qid ? `QID:${info.qid}` : "",
+        ].filter(Boolean);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${bits.join(" · ")}${info.sign ? `\n签名:${info.sign}` : ""}`,
             },
           ],
           details: info as unknown as Record<string, unknown>,
@@ -691,6 +790,9 @@ export class OneBotAdapter {
       setGroupBan,
       setGroupSpecialTitle,
       getGroupMemberInfo,
+      // 群成员与陌生人
+      listGroupMembers,
+      getStrangerInfo,
       // 表情回应
       setMsgEmojiLike,
       // 图片/表情包
