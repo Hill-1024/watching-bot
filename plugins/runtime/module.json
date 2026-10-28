@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "runtime",
+  "name": "Local Runtime",
+  "version": "0.1.0",
+  "description": "本机组件运行时:由主框架按配置唤醒 QQ / SnowLuma 等进程,并做存活检查与重启。",
+  "entry": "./server/index.ts",
+  "permissions": ["config"]
+}
